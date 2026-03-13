@@ -2,7 +2,8 @@
 
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const CACHE_FILE_NAME = 'zotanlp-year-cache-v4.json';
-const PREF_PREFIX = 'extensions.zot-anlp-metadata.';
+const PREF_PREFIX = 'extensions.zotanlp.';
+const LEGACY_PREF_PREFIX = 'extensions.zot-anlp-metadata.';
 const PLUGIN_TITLE = 'ZotANLP';
 const MENU_LABEL = 'ZotANLP: Add Metadata From Web';
 
@@ -44,8 +45,13 @@ function notify(message) {
 
 function getPref(key, fallback) {
   const prefName = `${PREF_PREFIX}${key}`;
+  const legacyPrefName = `${LEGACY_PREF_PREFIX}${key}`;
   const value = Zotero.Prefs.get(prefName, true);
+  const legacyValue = Zotero.Prefs.get(legacyPrefName, true);
   if (value === undefined || value === null || value === '') {
+    if (legacyValue !== undefined && legacyValue !== null && legacyValue !== '') {
+      return legacyValue;
+    }
     return fallback;
   }
   return value;
@@ -558,7 +564,17 @@ function toCreator(name) {
   }
 
   const parts = cleaned.split(/\s+/);
+  const hasLatin = /[A-Za-z]/.test(cleaned);
+  const hasCJK = /[\u3040-\u30ff\u3400-\u9fff]/.test(cleaned);
+
   if (parts.length >= 2) {
+    if (hasLatin && !hasCJK) {
+      return {
+        firstName: parts.slice(0, -1).join(' '),
+        lastName: parts[parts.length - 1],
+        creatorType: 'author'
+      };
+    }
     return {
       firstName: parts.slice(1).join(' '),
       lastName: parts[0],
