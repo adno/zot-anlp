@@ -1,6 +1,8 @@
 # ZotANLP
 
-[English](#english)
+<img src="zotero-screenshot.png" width="1372" />
+
+[English](#english) below.
 
 ## 日本語
 
