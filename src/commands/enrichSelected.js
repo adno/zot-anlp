@@ -1,7 +1,12 @@
 const { identifyAttachment } = require('../services/matcher');
 const { getYearData } = require('../services/anlpClient');
 const { ensureParentConferencePaper } = require('../services/zoteroMapper');
-const { getDefaultYear, getOverwriteMode } = require('../prefs');
+const { extractAbstractForAttachment } = require('../services/abstractExtractor');
+const {
+  getDefaultYear,
+  getOverwriteMode,
+  getExtractAbstract
+} = require('../prefs');
 
 function isPdfAttachment(item) {
   if (!item || typeof item.isAttachment !== 'function' || !item.isAttachment()) {
@@ -30,9 +35,67 @@ function getSelectedItems() {
   return pane.getSelectedItems() || [];
 }
 
+async function toPdfAttachments(selectedItems) {
+  const attachments = [];
+  const seen = new Set();
+
+  for (const item of selectedItems || []) {
+    if (!item) {
+      continue;
+    }
+
+    if (isPdfAttachment(item)) {
+      if (!seen.has(item.id)) {
+        attachments.push(item);
+        seen.add(item.id);
+      }
+      continue;
+    }
+
+    if (typeof item.isAttachment === 'function' && item.isAttachment()) {
+      continue;
+    }
+
+    if (typeof item.getAttachments !== 'function') {
+      continue;
+    }
+
+    const childIDs = item.getAttachments() || [];
+    if (!childIDs.length) {
+      continue;
+    }
+
+    let children = [];
+    if (
+      typeof Zotero !== 'undefined' &&
+      Zotero.Items &&
+      typeof Zotero.Items.getAsync === 'function'
+    ) {
+      children = await Zotero.Items.getAsync(childIDs);
+    } else if (
+      typeof Zotero !== 'undefined' &&
+      Zotero.Items &&
+      typeof Zotero.Items.get === 'function'
+    ) {
+      children = Zotero.Items.get(childIDs) || [];
+    }
+
+    for (const child of children) {
+      if (!isPdfAttachment(child) || seen.has(child.id)) {
+        continue;
+      }
+      attachments.push(child);
+      seen.add(child.id);
+    }
+  }
+
+  return attachments;
+}
+
 async function enrichAttachments(attachments) {
   const defaultYear = getDefaultYear();
   const overwriteMode = getOverwriteMode();
+  const extractAbstract = getExtractAbstract();
 
   let updated = 0;
   let skipped = 0;
@@ -58,9 +121,25 @@ async function enrichAttachments(attachments) {
         continue;
       }
 
+      const debug = typeof Zotero !== 'undefined' && typeof Zotero.debug === 'function'
+        ? (message) => {
+          const title = attachment.getField ? attachment.getField('title') : '';
+          Zotero.debug(
+            `[zot-anlp-metadata][abstract] item=${attachment.id || 'unknown'} ` +
+            `title="${String(title || '').slice(0, 120)}" ${message}`
+          );
+        }
+        : null;
+
+      const abstractText = extractAbstract
+        ? await extractAbstractForAttachment(attachment, { debug })
+        : '';
+      if (debug && !extractAbstract) {
+        debug('skipped extraction because extensions.zotanlp.extractAbstract=false');
+      }
       await ensureParentConferencePaper(
         attachment,
-        paper,
+        { ...paper, abstractNote: abstractText || '' },
         data.conference,
         overwriteMode
       );
@@ -79,7 +158,7 @@ async function enrichAttachments(attachments) {
 
 async function enrichSelected() {
   const selected = getSelectedItems();
-  const attachments = selected.filter(isPdfAttachment);
+  const attachments = await toPdfAttachments(selected);
   return enrichAttachments(attachments);
 }
 
@@ -87,5 +166,6 @@ module.exports = {
   enrichSelected,
   enrichAttachments,
   isPdfAttachment,
-  getSelectedItems
+  getSelectedItems,
+  toPdfAttachments
 };

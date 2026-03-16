@@ -1,0 +1,63 @@
+<html:style>
+  .zotanlp-pref-group {
+    margin-top: 12px;
+    max-width: 760px;
+    padding: 12px 14px;
+  }
+
+  .zotanlp-row {
+    align-items: center;
+    display: flex;
+    gap: 12px;
+    margin: 8px 0;
+  }
+
+  .zotanlp-row > label {
+    min-width: 220px;
+  }
+
+  .zotanlp-help {
+    color: color-mix(in srgb, currentColor 70%, transparent);
+    margin-top: 10px;
+  }
+</html:style>
+
+<groupbox class='zotanlp-pref-group'>
+  <caption label='General' />
+
+  <hbox align='center' class='zotanlp-row'>
+    <label value='Auto enrich new PDFs' />
+    <checkbox preference='extensions.zotanlp.autoEnrich' />
+  </hbox>
+
+  <hbox align='center' class='zotanlp-row'>
+    <label value='Default year' />
+    <html:input
+      type='number'
+      min='2000'
+      max='2100'
+      step='1'
+      preference='extensions.zotanlp.defaultYear'
+      style='width: 90px;'
+    />
+  </hbox>
+
+  <hbox align='center' class='zotanlp-row'>
+    <label value='Overwrite mode' />
+    <menulist preference='extensions.zotanlp.overwriteMode'>
+      <menupopup>
+        <menuitem value='missing' label='Fill missing fields only' />
+        <menuitem value='overwrite' label='Overwrite existing fields' />
+      </menupopup>
+    </menulist>
+  </hbox>
+
+  <hbox align='center' class='zotanlp-row'>
+    <label value='Extract abstract from PDF' />
+    <checkbox preference='extensions.zotanlp.extractAbstract' />
+  </hbox>
+
+  <html:p class='zotanlp-help'>
+    Extraction debug logs are always written to Zotero Debug Output.
+  </html:p>
+</groupbox>

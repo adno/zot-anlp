@@ -1,7 +1,8 @@
 const DEFAULTS = {
   defaultYear: new Date().getFullYear(),
   overwriteMode: 'missing',
-  autoEnrich: false
+  autoEnrich: true,
+  extractAbstract: true
 };
 
 function getPref(key, fallback) {
@@ -28,9 +29,14 @@ function getAutoEnrich() {
   return Boolean(getPref('autoEnrich', DEFAULTS.autoEnrich));
 }
 
+function getExtractAbstract() {
+  return Boolean(getPref('extractAbstract', DEFAULTS.extractAbstract));
+}
+
 module.exports = {
   getDefaultYear,
   getOverwriteMode,
   getAutoEnrich,
+  getExtractAbstract,
   DEFAULTS
 };

@@ -13,6 +13,13 @@ ZotANLP は、ANLP（言語処理学会）論文 PDF（例: `B2-3.pdf`）のメ�
 - このプラグインおよびこの README は OpenAI Codex によって作成されています。
 - 利用時は必ず結果を確認し、必要に応じて手動で修正してください。
 
+### バージョン履歴
+
+- `v0.1.0`
+  - PDF 1ページ目からの要旨/Abstract 抽出を追加（日本語/英語対応）
+  - `Settings -> ZotANLP` に設定パネルを追加
+  - 細かな改善（親アイテムからの手動実行、UI 更新の改善、抽出ロジック改善）
+
 ### 主な機能
 
 - `ZotANLP: Add Metadata From Web` を Tools メニューに追加
@@ -54,12 +61,16 @@ ZotANLP は、ANLP（言語処理学会）論文 PDF（例: `B2-3.pdf`）のメ�
 ### 使い方
 
 - 手動実行:
-  - PDF 添付を選択
+  - PDF 添付、または PDF を含む親アイテムを選択
   - `ZotANLP: Add Metadata From Web` を実行
 - 自動実行:
   - 有効時は新規追加 PDF を自動処理
 
-### 設定キー
+### 設定
+
+`Settings -> ZotANLP` に設定パネルが追加されます。
+
+### 設定キー（Config Editor）
 
 Zotero の Config Editor:
 `Settings -> Advanced -> Config Editor`
@@ -74,6 +85,10 @@ Zotero の Config Editor:
   - `missing` / `overwrite`
   - `missing`: 空欄のみ補完
   - `overwrite`: 既存値を上書き
+- `extensions.zotanlp.extractAbstract`
+  - `true` / `false`
+  - 既定値: `true`
+  - `true`: PDF 1ページ目から要旨/Abstract を抽出して `Abstract` フィールドに設定
 
 設定の使い分け:
 - 通常運用: `autoEnrich=true`, `overwriteMode=missing`
@@ -93,7 +108,7 @@ Zotero の Config Editor:
 
 - `manifest.json` の version 更新
 - パッケージ再作成
-  - `zip -r ZotANLP.xpi manifest.json bootstrap.js src README.md LICENSE`
+  - `zip -r ZotANLP.xpi manifest.json bootstrap.js prefs.xhtml src README.md LICENSE`
 - `.xpi` を再インストールして Zotero 再起動
 - 動作確認
   - Tools メニュー表示
@@ -112,11 +127,19 @@ ZotANLP is a Zotero plugin that enriches ANLP paper PDFs (Annual Meeting of the 
 - This plugin and this README were written by OpenAI Codex.
 - Use with caution and always verify metadata results before relying on them.
 
+### Version History
+
+- `v0.1.0`
+  - Added first-page abstract extraction (Japanese and English)
+  - Added a settings pane in `Settings -> ZotANLP`
+  - Minor improvements (manual run from parent item, UI refresh behavior, extraction robustness)
+
 ### Features
 
 - Adds `ZotANLP: Add Metadata From Web` to the Tools menu
 - Adds the same action to the item context menu
 - Supports automatic enrichment for newly added PDFs
+- Manual run can be executed from either a PDF attachment or a parent item that has PDF child attachments
 - Matches papers by ANLP ID (`B2-3`, `Q6-2`, `C2-25`, etc.)
 - Fetches metadata from ANLP program and bibliography pages
 - Creates/updates a parent `conferencePaper` item
@@ -152,12 +175,15 @@ Local build instructions are at the end of this README.
 
 ### Configuration keys
 
+ZotANLP settings are available in `Settings -> ZotANLP`.
+
 In Zotero Config Editor:
 `Settings -> Advanced -> Config Editor`
 
 - `extensions.zotanlp.autoEnrich` (`true`/`false`, default `true`)
 - `extensions.zotanlp.defaultYear` (for example `2026`)
 - `extensions.zotanlp.overwriteMode` (`missing` or `overwrite`)
+- `extensions.zotanlp.extractAbstract` (`true`/`false`, default `true`)
 
 Recommended usage:
 - Day-to-day: `autoEnrich=true` and `overwriteMode=missing`
@@ -173,5 +199,5 @@ Public domain. See [LICENSE](./LICENSE).
 ```bash
 cd zot-anlp
 rm -f ZotANLP.xpi
-zip -r ZotANLP.xpi manifest.json bootstrap.js src README.md LICENSE
+zip -r ZotANLP.xpi manifest.json bootstrap.js prefs.xhtml src README.md LICENSE
 ```

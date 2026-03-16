@@ -24,6 +24,36 @@ function toCreator(name) {
   };
 }
 
+function refreshItemUI(itemID) {
+  if (!itemID || typeof Zotero === 'undefined') {
+    return;
+  }
+
+  try {
+    if (Zotero.Notifier && typeof Zotero.Notifier.trigger === 'function') {
+      Zotero.Notifier.trigger('modify', 'item', [itemID], {});
+    }
+  } catch (error) {
+    // Best-effort UI refresh only.
+  }
+
+  try {
+    if (!Zotero.getActiveZoteroPane) {
+      return;
+    }
+    const pane = Zotero.getActiveZoteroPane();
+    if (
+      pane &&
+      pane.itemsView &&
+      typeof pane.itemsView.refreshAndMaintainSelection === 'function'
+    ) {
+      pane.itemsView.refreshAndMaintainSelection();
+    }
+  } catch (error) {
+    // Best-effort UI refresh only.
+  }
+}
+
 async function createParentItem(attachment, paper, conference) {
   const parent = new Zotero.Item('conferencePaper');
   parent.libraryID = attachment.libraryID;
@@ -38,6 +68,9 @@ async function createParentItem(attachment, paper, conference) {
   }
   parent.setField('url', paper.pdfUrl);
   parent.setField('extra', `ANLP ID: ${paper.paperId}`);
+  if (paper.abstractNote) {
+    parent.setField('abstractNote', paper.abstractNote);
+  }
 
   const creators = (paper.authors || []).map(toCreator).filter(Boolean);
   if (creators.length > 0) {
@@ -45,6 +78,7 @@ async function createParentItem(attachment, paper, conference) {
   }
 
   await parent.saveTx();
+  refreshItemUI(parent.id);
   return parent;
 }
 
@@ -81,6 +115,9 @@ async function updateParentItem(parent, paper, conference, overwriteMode = 'miss
   if (shouldUpdateField(parent, 'url', paper.pdfUrl, overwriteMode)) {
     parent.setField('url', paper.pdfUrl);
   }
+  if (shouldUpdateField(parent, 'abstractNote', paper.abstractNote, overwriteMode)) {
+    parent.setField('abstractNote', paper.abstractNote);
+  }
 
   if (overwriteMode === 'overwrite' || !parent.getField('extra')) {
     parent.setField('extra', `ANLP ID: ${paper.paperId}`);
@@ -94,6 +131,7 @@ async function updateParentItem(parent, paper, conference, overwriteMode = 'miss
   }
 
   await parent.saveTx();
+  refreshItemUI(parent.id);
   return parent;
 }
 
