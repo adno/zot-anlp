@@ -1,8 +1,22 @@
-const PAPER_ID_REGEX = /([A-Z]{1,2}\d-\d{1,2})/i;
+const PAPER_ID_REGEX = /([A-Z]{1,2}\d{1,2}-\d{1,2})/i;
+const STRICT_PAPER_FILENAME_REGEX = /^([A-Z]{1,2}\d{1,2}-\d{1,2})\.pdf$/i;
 const YEAR_URL_REGEX = /annual_meeting\/(\d{4})\//;
 
 function normalizePaperId(id) {
   return id ? id.toUpperCase() : null;
+}
+
+function isAnlpUrl(url) {
+  if (!url) {
+    return false;
+  }
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
+    return host === 'anlp.jp' || host === 'www.anlp.jp';
+  } catch (error) {
+    return false;
+  }
 }
 
 function extractPaperId(input) {
@@ -48,24 +62,45 @@ function basename(path) {
   return parts[parts.length - 1] || '';
 }
 
-async function identifyAttachment(attachment, defaultYear = null) {
+async function identifyAttachment(attachment) {
   const title = attachment.getField ? attachment.getField('title') : '';
-  const url = attachment.getField ? attachment.getField('url') : '';
+  const url = attachment.getField ? String(attachment.getField('url') || '').trim() : '';
   const path = await getAttachmentPath(attachment);
   const fileName = basename(path) || title;
 
-  const paperId =
-    extractPaperId(fileName) ||
-    extractPaperId(title) ||
-    extractPaperId(url);
+  let paperId = null;
+  let year = null;
+  let reasonCode = '';
 
-  const year = extractYearFromUrl(url) || defaultYear;
+  if (url) {
+    if (!isAnlpUrl(url)) {
+      reasonCode = 'url_not_anlp_domain';
+    } else {
+      paperId = extractPaperId(fileName) || extractPaperId(title) || extractPaperId(url);
+      if (!paperId) {
+        reasonCode = 'url_missing_paper_id';
+      } else {
+        year = extractYearFromUrl(url);
+        if (!year) {
+          reasonCode = 'url_missing_year';
+        }
+      }
+    }
+  } else {
+    const strictMatch = fileName.match(STRICT_PAPER_FILENAME_REGEX);
+    if (!strictMatch) {
+      reasonCode = 'strict_filename_required_no_url';
+    } else {
+      paperId = normalizePaperId(strictMatch[1]);
+    }
+  }
 
   return {
     paperId,
     year,
     fileName,
-    url
+    url,
+    reasonCode
   };
 }
 
@@ -73,5 +108,6 @@ module.exports = {
   extractPaperId,
   extractYearFromUrl,
   identifyAttachment,
-  normalizePaperId
+  normalizePaperId,
+  isAnlpUrl
 };

@@ -1,18 +1,21 @@
 'use strict';
 
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const CACHE_FILE_NAME = 'zotanlp-year-cache-v4.json';
+const CACHE_FILE_NAME = 'zotanlp-year-cache-v7.json';
 const PREF_PREFIX = 'extensions.zotanlp.';
 const LEGACY_PREF_PREFIX = 'extensions.zot-anlp-metadata.';
 const PLUGIN_TITLE = 'ZotANLP';
-const MENU_LABEL = 'ZotANLP: Add Metadata From Web';
+const MENU_LABEL = 'ZotANLP: Add Metadata from Web';
 const PREFS_PANE_PLUGIN_ID = 'zot-anlp-metadata@local';
 
 let toolsMenuItem = null;
 let contextMenuItem = null;
+let toolsMenuPopupNode = null;
+let contextMenuPopupNode = null;
 let notifierID = null;
 let menuRetryTimer = null;
 let menuRetryCount = 0;
+let menuStateToken = 0;
 let autoEnrichTimer = null;
 const pendingAutoItemIDs = new Set();
 let loadedFromDisk = false;
@@ -21,6 +24,18 @@ let prefsPaneRegistered = false;
 
 const MAX_MENU_RETRIES = 20;
 const cacheByYear = new Map();
+const JAPANESE_NAME_REGEX = /^[々〆〇ヶぁ-ゖァ-ヺー一-龯]+$/;
+const NAME_LENGTH_PRIOR = {
+  3: [[2, 1], [1, 2]],
+  4: [[2, 2], [1, 3], [3, 1]],
+  5: [[2, 3], [3, 2], [1, 4], [4, 1]],
+  6: [[3, 3], [2, 4], [4, 2], [1, 5], [5, 1]],
+  7: [[3, 4], [4, 3], [2, 5], [5, 2], [1, 6], [6, 1]]
+};
+const jpSurnameSet = new Set();
+const jpGivenNameSet = new Set();
+let jpNameLexiconLoaded = false;
+let jpNameLexiconLoadPromise = null;
 
 function log(message, error) {
   const prefix = '[zot-anlp-metadata]';
@@ -30,6 +45,11 @@ function log(message, error) {
       Zotero.logError(error);
     }
   }
+}
+
+function debugValue(value, maxLen = 120) {
+  const str = value === undefined ? '<undefined>' : String(value === null ? '<null>' : value);
+  return str.length > maxLen ? `${str.slice(0, maxLen)}...` : str;
 }
 
 function notify(message) {
@@ -71,9 +91,9 @@ function migrateAndInitializePrefs() {
 
   const defaults = {
     autoEnrich: true,
-    defaultYear: new Date().getFullYear(),
     overwriteMode: 'missing',
-    extractAbstract: true
+    extractAbstract: true,
+    splitNoSpaceUsingEnamdict: true
   };
 
   for (const [key, fallback] of Object.entries(defaults)) {
@@ -95,14 +115,46 @@ function migrateAndInitializePrefs() {
   }
 }
 
-function getDefaultYear() {
-  const y = Number(getPref('defaultYear', new Date().getFullYear()));
-  return Number.isFinite(y) ? y : new Date().getFullYear();
-}
-
 function getOverwriteMode() {
-  const mode = String(getPref('overwriteMode', 'missing'));
-  return mode === 'overwrite' ? 'overwrite' : 'missing';
+  const normalizeMode = (value) => {
+    if (value === 'overwrite' || value === true || value === 1) {
+      return 'overwrite';
+    }
+    const text = String(value || '').trim().toLowerCase();
+    if (text === 'overwrite' || text === 'true' || text === '1' || text === 'yes' || text === 'on') {
+      return 'overwrite';
+    }
+    if (text === 'missing' || text === 'false' || text === '0' || text === 'no' || text === 'off') {
+      return 'missing';
+    }
+    return null;
+  };
+
+  const current = Zotero.Prefs.get(`${PREF_PREFIX}overwriteMode`, true);
+  const currentMode = normalizeMode(current);
+  if (currentMode) {
+    log(
+      `[prefs] overwriteMode resolved from current key: raw=${debugValue(current)} ` +
+      `normalized=${currentMode}`
+    );
+    return currentMode;
+  }
+
+  const legacy = Zotero.Prefs.get(`${LEGACY_PREF_PREFIX}overwriteMode`, true);
+  const legacyMode = normalizeMode(legacy);
+  if (legacyMode) {
+    log(
+      `[prefs] overwriteMode resolved from legacy key: raw=${debugValue(legacy)} ` +
+      `normalized=${legacyMode}`
+    );
+    return legacyMode;
+  }
+
+  log(
+    `[prefs] overwriteMode fallback to missing; currentRaw=${debugValue(current)} ` +
+    `legacyRaw=${debugValue(legacy)}`
+  );
+  return 'missing';
 }
 
 function getAutoEnrich() {
@@ -111,6 +163,10 @@ function getAutoEnrich() {
 
 function getExtractAbstract() {
   return Boolean(getPref('extractAbstract', true));
+}
+
+function getSplitNoSpaceUsingEnamdict() {
+  return Boolean(getPref('splitNoSpaceUsingEnamdict', true));
 }
 
 function previewLines(lines, maxLines = 8) {
@@ -173,6 +229,74 @@ async function writeDiskCache() {
   await IOUtils.writeUTF8(cachePath, JSON.stringify(obj));
 }
 
+async function clearYearCache() {
+  await loadDiskCache();
+  const before = cacheByYear.size;
+  cacheByYear.clear();
+  loadedFromDisk = true;
+
+  const cachePath = getCachePath();
+  if (cachePath && typeof IOUtils !== 'undefined') {
+    try {
+      if (typeof IOUtils.remove === 'function') {
+        await IOUtils.remove(cachePath, { ignoreAbsent: true });
+      }
+    } catch (error) {
+      log(`Failed to remove cache file at ${cachePath}`, error);
+    }
+  }
+
+  log(`[cache] cleared cache entries=${before} path=${cachePath || 'n/a'}`);
+  notify(`Cache cleared (${before} year${before === 1 ? '' : 's'}).`);
+}
+
+function confirmAndClearYearCache() {
+  const prompt = getPromptService();
+  if (prompt && typeof prompt.confirmEx === 'function') {
+    const choice = prompt.confirmEx(
+      null,
+      PLUGIN_TITLE,
+      'Delete cached ANLP year data now?',
+      prompt.BUTTON_POS_0 * prompt.BUTTON_TITLE_CANCEL +
+        prompt.BUTTON_POS_1 * prompt.BUTTON_TITLE_IS_STRING,
+      null,
+      'Clear Cache',
+      null,
+      null,
+      {}
+    );
+    if (choice !== 1) {
+      return;
+    }
+  }
+
+  void clearYearCache();
+}
+
+function registerPublicApi() {
+  if (typeof Zotero === 'undefined') {
+    return;
+  }
+  if (!Zotero.ZotANLP || typeof Zotero.ZotANLP !== 'object') {
+    Zotero.ZotANLP = {};
+  }
+  Zotero.ZotANLP.clearCacheFromPrefs = confirmAndClearYearCache;
+}
+
+function unregisterPublicApi() {
+  if (typeof Zotero === 'undefined' || !Zotero.ZotANLP) {
+    return;
+  }
+  try {
+    delete Zotero.ZotANLP.clearCacheFromPrefs;
+    if (Object.keys(Zotero.ZotANLP).length === 0) {
+      delete Zotero.ZotANLP;
+    }
+  } catch (error) {
+    // Best effort cleanup.
+  }
+}
+
 function stripTags(html) {
   return String(html)
     .replace(/<[^>]*>/g, ' ')
@@ -199,6 +323,14 @@ function splitAuthors(text) {
       .replace(/\s+/g, ' ')
       .trim())
     .filter(Boolean);
+}
+
+function stripPageRangeNote(text) {
+  return String(text || '')
+    .replace(/[（(]\s*pp?\.\s*\d+\s*[-–—~〜]\s*\d+\s*[)）]/ig, ' ')
+    .replace(/[（(]\s*pp?\.\s*\d+\s*[)）]/ig, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function splitAuthorsAndTitle(text) {
@@ -237,7 +369,7 @@ function normalizeTitle(title, paperId) {
   if (!title) {
     return paperId;
   }
-  return title
+  return stripPageRangeNote(title)
     .replace(/\bPDF\b/gi, '')
     .replace(/\(\s*pdf\s*\)/gi, '')
     .replace(/\s+/g, ' ')
@@ -248,7 +380,7 @@ function looksLikeAuthorList(text) {
   if (!text) {
     return false;
   }
-  const compact = text.replace(/\s+/g, ' ').trim();
+  const compact = stripPageRangeNote(text).replace(/\s+/g, ' ').trim();
   if (!compact) {
     return false;
   }
@@ -263,11 +395,11 @@ function looksLikeAuthorList(text) {
 }
 
 function cleanCandidateText(text, paperId) {
-  return String(text || '')
+  return stripPageRangeNote(String(text || '')
     .replace(new RegExp(`\\b${paperId}\\b`, 'ig'), ' ')
     .replace(/\b(pdf|download)\b/ig, ' ')
     .replace(/\s+/g, ' ')
-    .trim();
+    .trim());
 }
 
 function extractContext(html, index) {
@@ -285,10 +417,10 @@ function normalizeTitleLine(line, paperId) {
 }
 
 function normalizeRawAuthorLine(line) {
-  return String(line || '')
+  return stripPageRangeNote(String(line || '')
     .replace(/^Image\s*/i, '')
     .replace(/\s+/g, ' ')
-    .trim();
+    .trim());
 }
 
 function looksLikeTitleCandidate(text) {
@@ -391,10 +523,10 @@ function parseAuthorsAndTitleFromContext(contextHtml, paperId) {
 
 function parseProgramHtml(html, year) {
   const papers = [];
-  const re = /<a[^>]*href=["']([^"']*pdf_dir\/([A-Z]{1,2}\d-\d{1,2})\.pdf(?:\?[^"']*)?)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  const re = /<a[^>]*href=["']([^"']*pdf_dir\/([A-Z]{1,2}\d{1,2}-\d{1,2})\.pdf(?:\?[^"']*)?)["'][^>]*>([\s\S]*?)<\/a>/gi;
   const titleById = new Map();
 
-  const titleRe = /<span[^>]*id=["']([A-Z]{1,2}\d-\d{1,2})[^"']*["'][^>]*>[\s\S]*?<\/span>[\s\S]*?<span[^>]*class=["'][^"']*\btitle\b[^"']*["'][^>]*>([\s\S]*?)<\/span>/gi;
+  const titleRe = /<span[^>]*id=["']([A-Z]{1,2}\d{1,2}-\d{1,2})[^"']*["'][^>]*>[\s\S]*?<\/span>[\s\S]*?<span[^>]*class=["'][^"']*\btitle\b[^"']*["'][^>]*>([\s\S]*?)<\/span>/gi;
   let titleMatch;
   while ((titleMatch = titleRe.exec(html)) !== null) {
     const id = titleMatch[1].toUpperCase();
@@ -436,12 +568,15 @@ function parseProgramHtml(html, year) {
   while ((match = re.exec(html)) !== null) {
     const href = match[1];
     const paperId = match[2].toUpperCase();
+    const anchorText = normalizeTitle(stripTags(match[3] || ''), paperId);
 
     const contextHtml = extractContext(html, match.index);
     const parsed = parseAuthorsAndTitleFromContext(contextHtml, paperId);
     const rawAuthors = parsed.rawAuthors || extractRawAuthorsFromContext(contextHtml);
     const authors = rawAuthors ? splitAuthors(rawAuthors) : parsed.authors;
-    const title = titleById.get(paperId) || parsed.title;
+    const title = titleById.get(paperId) ||
+      (anchorText && anchorText !== paperId ? anchorText : '') ||
+      parsed.title;
 
     papers.push({
       paperId,
@@ -518,9 +653,323 @@ function parseBiblioHtml(html, year) {
   };
 }
 
+function normalizeCharset(label) {
+  if (!label) {
+    return '';
+  }
+
+  const normalized = String(label).trim().toLowerCase();
+  const aliases = {
+    'utf8': 'utf-8',
+    'shift-jis': 'shift_jis',
+    'sjis': 'shift_jis',
+    'x-sjis': 'shift_jis',
+    'ms_kanji': 'shift_jis',
+    'windows-31j': 'shift_jis',
+    'cp932': 'shift_jis',
+    'eucjp': 'euc-jp',
+    'euc_jp': 'euc-jp',
+    'iso2022jp': 'iso-2022-jp'
+  };
+
+  return aliases[normalized] || normalized;
+}
+
+function extractCharsetFromContentType(contentType) {
+  if (!contentType) {
+    return '';
+  }
+
+  const match = String(contentType).match(/charset\s*=\s*["']?\s*([a-z0-9._-]+)/i);
+  return normalizeCharset(match ? match[1] : '');
+}
+
+function extractCharsetFromHtmlMeta(asciiHead) {
+  if (!asciiHead) {
+    return '';
+  }
+
+  const html = String(asciiHead);
+  const metaCharset = html.match(/<meta[^>]*charset\s*=\s*["']?\s*([a-z0-9._-]+)/i);
+  if (metaCharset) {
+    return normalizeCharset(metaCharset[1]);
+  }
+
+  const metaContentType = html.match(
+    /<meta[^>]*content\s*=\s*["'][^"']*charset\s*=\s*([a-z0-9._-]+)/i
+  );
+  return normalizeCharset(metaContentType ? metaContentType[1] : '');
+}
+
+function bytesToAscii(bytes, maxBytes = 8192) {
+  const limit = Math.min(bytes.length, maxBytes);
+  let out = '';
+  for (let i = 0; i < limit; i += 1) {
+    out += String.fromCharCode(bytes[i]);
+  }
+  return out;
+}
+
+function decodeHtmlBytes(bytes, contentType = '') {
+  if (!(bytes instanceof Uint8Array)) {
+    return '';
+  }
+
+  const asciiHead = bytesToAscii(bytes);
+  const charset = extractCharsetFromHtmlMeta(asciiHead) ||
+    extractCharsetFromContentType(contentType) ||
+    'utf-8';
+
+  try {
+    return new TextDecoder(charset).decode(bytes);
+  } catch (error) {
+    // Fallbacks for environments that do not support the preferred label.
+  }
+
+  const fallbacks = ['utf-8', 'shift_jis', 'euc-jp', 'iso-2022-jp', 'windows-1252'];
+  for (const candidate of fallbacks) {
+    if (candidate === charset) {
+      continue;
+    }
+    try {
+      return new TextDecoder(candidate).decode(bytes);
+    } catch (error) {
+      // Try next fallback.
+    }
+  }
+
+  return new TextDecoder().decode(bytes);
+}
+
+function isLegacyAnnualMeetingUrl(url) {
+  const match = String(url || '').match(/annual_meeting\/(\d{4})\//);
+  if (!match) {
+    return false;
+  }
+  const year = Number(match[1]);
+  return Number.isFinite(year) && year <= 2005;
+}
+
+function hasReplacementChar(text) {
+  return /�/.test(String(text || ''));
+}
+
+function extractTitlePreview(html) {
+  const match = String(html || '').match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  return debugValue(match ? stripTags(match[1]) : '', 90);
+}
+
+function logEncodingResult(context) {
+  const {
+    url,
+    source,
+    contentType,
+    declaredCharset,
+    bytes,
+    text
+  } = context;
+  const shouldLog = isLegacyAnnualMeetingUrl(url) || hasReplacementChar(text);
+  if (!shouldLog) {
+    return;
+  }
+
+  log(
+    `[encoding] source=${source} url=${url} contentType="${debugValue(contentType)}" ` +
+      `declaredCharset=${declaredCharset || 'unknown'} bytes=${bytes || 'n/a'} ` +
+      `hasReplacement=${hasReplacementChar(text)} titlePreview="${extractTitlePreview(text)}"`
+  );
+}
+
 async function fetchText(url) {
-  const response = await Zotero.HTTP.request('GET', url);
-  return response.responseText;
+  if (typeof fetch === 'function') {
+    try {
+      const fetchResponse = await fetch(url);
+      if (!fetchResponse.ok) {
+        throw new Error(`HTTP ${fetchResponse.status}`);
+      }
+      const bytes = new Uint8Array(await fetchResponse.arrayBuffer());
+      const contentType = fetchResponse.headers.get('content-type') || '';
+      const declaredCharset = extractCharsetFromHtmlMeta(bytesToAscii(bytes)) ||
+        extractCharsetFromContentType(contentType) ||
+        'utf-8';
+      const decoded = decodeHtmlBytes(bytes, contentType);
+      logEncodingResult({
+        url,
+        source: 'fetch-arraybuffer',
+        contentType,
+        declaredCharset,
+        bytes: bytes.length,
+        text: decoded
+      });
+      return decoded;
+    } catch (error) {
+      log(`Fetch API failed for ${url}; falling back to Zotero.HTTP.request`, error);
+    }
+  }
+
+  const response = await Zotero.HTTP.request('GET', url, { responseType: 'arraybuffer' });
+  const buffer = response ? response.response : null;
+  if (buffer instanceof ArrayBuffer || ArrayBuffer.isView(buffer)) {
+    const bytes = buffer instanceof ArrayBuffer
+      ? new Uint8Array(buffer)
+      : new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    const contentType = typeof response.getResponseHeader === 'function'
+      ? (response.getResponseHeader('Content-Type') || '')
+      : '';
+    const declaredCharset = extractCharsetFromHtmlMeta(bytesToAscii(bytes)) ||
+      extractCharsetFromContentType(contentType) ||
+      'utf-8';
+    const decoded = decodeHtmlBytes(bytes, contentType);
+    logEncodingResult({
+      url,
+      source: 'zotero-http-arraybuffer',
+      contentType,
+      declaredCharset,
+      bytes: bytes.length,
+      text: decoded
+    });
+    return decoded;
+  }
+
+  if (typeof Blob !== 'undefined' && buffer instanceof Blob) {
+    const bytes = new Uint8Array(await buffer.arrayBuffer());
+    const contentType = typeof response.getResponseHeader === 'function'
+      ? (response.getResponseHeader('Content-Type') || '')
+      : '';
+    const declaredCharset = extractCharsetFromHtmlMeta(bytesToAscii(bytes)) ||
+      extractCharsetFromContentType(contentType) ||
+      'utf-8';
+    const decoded = decodeHtmlBytes(bytes, contentType);
+    logEncodingResult({
+      url,
+      source: 'zotero-http-blob',
+      contentType,
+      declaredCharset,
+      bytes: bytes.length,
+      text: decoded
+    });
+    return decoded;
+  }
+
+  if (typeof response.response === 'string') {
+    const text = response.response;
+    logEncodingResult({
+      url,
+      source: 'zotero-http-string',
+      contentType: '',
+      declaredCharset: '',
+      bytes: null,
+      text
+    });
+    if (isLegacyAnnualMeetingUrl(url) && hasReplacementChar(text)) {
+      try {
+        const docResponse = await Zotero.HTTP.request('GET', url, { responseType: 'document' });
+        const doc = docResponse ? docResponse.response : null;
+        const docHtml = doc && doc.documentElement ? doc.documentElement.outerHTML : '';
+        if (docHtml) {
+          logEncodingResult({
+            url,
+            source: 'zotero-http-document-fallback',
+            contentType: '',
+            declaredCharset: doc.characterSet || '',
+            bytes: null,
+            text: docHtml
+          });
+          return docHtml;
+        }
+      } catch (error) {
+        log(`Document fallback failed for ${url}`, error);
+      }
+    }
+    return text;
+  }
+  const textResponse = await Zotero.HTTP.request('GET', url);
+  if (typeof textResponse.response === 'string') {
+    const text = textResponse.response;
+    logEncodingResult({
+      url,
+      source: 'zotero-http-text-response',
+      contentType: '',
+      declaredCharset: '',
+      bytes: null,
+      text
+    });
+    return text;
+  }
+  try {
+    if (typeof textResponse.responseText === 'string') {
+      const text = textResponse.responseText;
+      logEncodingResult({
+        url,
+        source: 'zotero-http-responseText',
+        contentType: '',
+        declaredCharset: '',
+        bytes: null,
+        text
+      });
+      return text;
+    }
+  } catch (error) {
+    // Ignore invalid responseText getter access and fall through.
+  }
+  return '';
+}
+
+function isFrameDocument(html) {
+  return /<(?:frameset|frame)\b/i.test(String(html || ''));
+}
+
+function extractFrameTargets(html, baseUrl) {
+  const tags = String(html || '').match(/<frame\b[^>]*>/gi) || [];
+  const targets = [];
+
+  for (const tag of tags) {
+    const srcMatch = tag.match(/\bsrc\s*=\s*["']?([^"'>\s]+)/i);
+    if (!srcMatch || !srcMatch[1]) {
+      continue;
+    }
+
+    const nameMatch = tag.match(/\bname\s*=\s*["']?([^"'>\s]+)/i);
+    let href = '';
+    try {
+      href = new URL(srcMatch[1], baseUrl).href;
+    } catch (error) {
+      href = '';
+    }
+    if (!href) {
+      continue;
+    }
+
+    const name = (nameMatch && nameMatch[1]) ? String(nameMatch[1]).toLowerCase() : '';
+    const score = (
+      (/\bbody|main|content\b/.test(name) ? 4 : 0) +
+      (/\bprogram\b/i.test(srcMatch[1]) ? 3 : 0)
+    );
+    targets.push({ href, score });
+  }
+
+  return targets
+    .sort((a, b) => b.score - a.score)
+    .map((target) => target.href)
+    .filter((href, index, arr) => arr.indexOf(href) === index);
+}
+
+async function resolveProgramHtml(year) {
+  const rootUrl = `https://www.anlp.jp/proceedings/annual_meeting/${year}/`;
+  const rootHtml = await fetchText(rootUrl);
+  if (parseProgramHtml(rootHtml, year).length > 0 || !isFrameDocument(rootHtml)) {
+    return rootHtml;
+  }
+
+  const frameTargets = extractFrameTargets(rootHtml, rootUrl);
+  for (const targetUrl of frameTargets) {
+    const targetHtml = await fetchText(targetUrl);
+    if (parseProgramHtml(targetHtml, year).length > 0) {
+      return targetHtml;
+    }
+  }
+
+  return rootHtml;
 }
 
 async function getYearData(year, forceRefresh = false) {
@@ -534,10 +983,9 @@ async function getYearData(year, forceRefresh = false) {
     }
   }
 
-  const programURL = `https://www.anlp.jp/proceedings/annual_meeting/${year}/`;
   const biblioURL = `https://www.anlp.jp/proceedings/annual_meeting/${year}/html/biblio.html`;
 
-  const programHtml = await fetchText(programURL);
+  const programHtml = await resolveProgramHtml(year);
   let biblioHtml = '';
   try {
     biblioHtml = await fetchText(biblioURL);
@@ -555,8 +1003,38 @@ async function getYearData(year, forceRefresh = false) {
   return data;
 }
 
-const PAPER_ID_REGEX = /([A-Z]{1,2}\d-\d{1,2})/i;
+function shouldRetryWithFreshYearData(paper) {
+  if (!paper) {
+    return true;
+  }
+
+  const title = String(paper.title || '').trim();
+  const rawAuthors = String(paper.rawAuthors || '').trim();
+  if (!title || title === String(paper.paperId || '').trim()) {
+    return true;
+  }
+
+  if (hasReplacementChar(title) || hasReplacementChar(rawAuthors)) {
+    return true;
+  }
+
+  // Old cached parser output sometimes leaked page ranges into author metadata.
+  if (/\bpp?\.\s*\d+\s*[-–—~〜]\s*\d+/i.test(rawAuthors)) {
+    return true;
+  }
+
+  // If raw authors exists but does not look like an author line, treat cache as stale.
+  if (rawAuthors && !looksLikeAuthorList(rawAuthors)) {
+    return true;
+  }
+
+  return false;
+}
+
+const PAPER_ID_REGEX = /([A-Z]{1,2}\d{1,2}-\d{1,2})/i;
+const STRICT_PAPER_FILENAME_REGEX = /^([A-Z]{1,2}\d{1,2}-\d{1,2})\.pdf$/i;
 const YEAR_URL_REGEX = /annual_meeting\/(\d{4})\//;
+const ANLP_HEADER_YEAR_REGEX = /言語処理学会.*(\d{4})\s*年/u;
 
 function extractPaperId(input) {
   if (!input) {
@@ -582,9 +1060,68 @@ function basename(path) {
   return parts[parts.length - 1] || '';
 }
 
-async function identifyAttachment(attachment, defaultYear) {
-  const title = attachment.getField ? attachment.getField('title') : '';
-  const url = attachment.getField ? attachment.getField('url') : '';
+function normalizePaperId(id) {
+  return id ? String(id).toUpperCase() : null;
+}
+
+function getAttachmentTitle(attachment) {
+  return attachment && attachment.getField ? String(attachment.getField('title') || '') : '';
+}
+
+function getAttachmentUrl(attachment) {
+  return attachment && attachment.getField ? String(attachment.getField('url') || '').trim() : '';
+}
+
+function getAttachmentDisplayName(meta) {
+  return meta.fileName || meta.title || `Item ${meta.itemID || 'unknown'}`;
+}
+
+function getAttachmentFileNameQuick(attachment) {
+  if (!attachment) {
+    return '';
+  }
+
+  if (typeof attachment.getFilename === 'function') {
+    try {
+      const name = attachment.getFilename();
+      if (name) {
+        return String(name);
+      }
+    } catch (error) {
+      // Ignore and continue fallback.
+    }
+  }
+
+  if (typeof attachment.getFilePath === 'function') {
+    try {
+      const path = attachment.getFilePath();
+      if (path) {
+        return basename(path);
+      }
+    } catch (error) {
+      // Ignore and continue fallback.
+    }
+  }
+
+  return getAttachmentTitle(attachment);
+}
+
+function isAnlpUrl(url) {
+  if (!url) {
+    return false;
+  }
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
+    return host === 'anlp.jp' || host === 'www.anlp.jp';
+  } catch (error) {
+    return false;
+  }
+}
+
+async function getAttachmentMeta(attachment) {
+  const title = getAttachmentTitle(attachment);
+  const url = getAttachmentUrl(attachment);
   let path = '';
 
   if (typeof attachment.getFilePathAsync === 'function') {
@@ -598,9 +1135,121 @@ async function identifyAttachment(attachment, defaultYear) {
   const fileName = basename(path) || title;
 
   return {
-    paperId: extractPaperId(fileName) || extractPaperId(title) || extractPaperId(url),
-    year: extractYearFromUrl(url) || defaultYear
+    itemID: attachment ? attachment.id : null,
+    title,
+    url,
+    path,
+    fileName,
+    displayName: getAttachmentDisplayName({
+      itemID: attachment ? attachment.id : null,
+      title,
+      fileName
+    })
   };
+}
+
+function buildAttachmentIssue(meta, reasonCode, reason, extra = {}) {
+  return {
+    attachment: meta.attachment || null,
+    itemID: meta.itemID,
+    displayName: meta.displayName,
+    fileName: meta.fileName,
+    title: meta.title,
+    url: meta.url,
+    reasonCode,
+    reason,
+    ...extra
+  };
+}
+
+async function identifyAttachmentForEnrich(attachment) {
+  const meta = await getAttachmentMeta(attachment);
+  meta.attachment = attachment;
+
+  const loosePaperId = normalizePaperId(
+    extractPaperId(meta.fileName) || extractPaperId(meta.title) || extractPaperId(meta.url)
+  );
+
+  if (meta.url) {
+    if (!isAnlpUrl(meta.url)) {
+      return buildAttachmentIssue(
+        meta,
+        'url_not_anlp_domain',
+        'URL is present but not on anlp.jp'
+      );
+    }
+    if (!loosePaperId) {
+      return buildAttachmentIssue(
+        meta,
+        'url_missing_paper_id',
+        'ANLP paper ID was not found in URL/title/file name'
+      );
+    }
+
+    const year = extractYearFromUrl(meta.url);
+    if (!year) {
+      return buildAttachmentIssue(
+        meta,
+        'url_missing_year',
+        'URL does not include annual_meeting/<year>/'
+      );
+    }
+
+    return {
+      ...meta,
+      paperId: loosePaperId,
+      year,
+      source: 'url',
+      eligible: true
+    };
+  }
+
+  const strictMatch = String(meta.fileName || '').match(STRICT_PAPER_FILENAME_REGEX);
+  if (!strictMatch) {
+    return buildAttachmentIssue(
+      meta,
+      'strict_filename_required_no_url',
+      'No URL: file name must be exactly like B1-12.pdf'
+    );
+  }
+
+  const paperId = normalizePaperId(strictMatch[1]);
+  const header = await extractConferenceYearFromAttachment(attachment);
+  if (!header.hasConferenceMarker || !header.year) {
+    return buildAttachmentIssue(
+      meta,
+      'manual_year_required',
+      !header.hasConferenceMarker
+        ? 'No URL: first page does not contain 言語処理学会'
+        : 'No URL: could not infer year from first-page header',
+      { paperId, manualYearCandidate: true }
+    );
+  }
+
+  return {
+    ...meta,
+    paperId,
+    year: header.year,
+    source: 'file_header',
+    eligible: true
+  };
+}
+
+function seemsAnlpAttachmentQuick(item) {
+  if (!isPdfAttachment(item)) {
+    return false;
+  }
+
+  const url = getAttachmentUrl(item);
+  const fileName = getAttachmentFileNameQuick(item);
+  if (url) {
+    if (!isAnlpUrl(url)) {
+      return false;
+    }
+    return Boolean(extractPaperId(fileName) || extractPaperId(url) || extractPaperId(getAttachmentTitle(item)));
+  }
+
+  return STRICT_PAPER_FILENAME_REGEX.test(fileName);
 }
 
 function normalizeHeadingText(text) {
@@ -634,6 +1283,59 @@ function isSectionHeading(line, language, preferDefaultTitle) {
   return /^1[\s.]+\S+/.test(normalized);
 }
 
+function containsEmailAddress(line) {
+  return /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.test(String(line || ''));
+}
+
+function findAbstractBoundsWithoutHeading(lines, language) {
+  const maxEmailScan = Math.min(lines.length, 40);
+  let emailIndex = -1;
+  for (let i = 0; i < maxEmailScan; i += 1) {
+    if (containsEmailAddress(lines[i])) {
+      emailIndex = i;
+      break;
+    }
+  }
+
+  if (emailIndex < 0 || emailIndex + 1 >= lines.length) {
+    return null;
+  }
+
+  const start = emailIndex + 1;
+  let end = lines.length;
+  let endMode = 'none';
+
+  for (let i = start; i < lines.length; i += 1) {
+    if (isSectionHeading(lines[i], language, true)) {
+      end = i;
+      endMode = 'preferred';
+      break;
+    }
+  }
+
+  if (end === lines.length) {
+    for (let i = start; i < lines.length; i += 1) {
+      if (isSectionHeading(lines[i], language, false)) {
+        end = i;
+        endMode = 'fallback';
+        break;
+      }
+    }
+  }
+
+  if (end <= start || end - start > 20) {
+    return null;
+  }
+
+  return {
+    start,
+    end,
+    headingIndex: -1,
+    endMode: `${endMode}-no-heading`,
+    trigger: 'email'
+  };
+}
+
 function findAbstractBounds(lines, language) {
   const headingPattern = language === 'ja'
     ? /^概要(?:\s*[:：]\s*(.*))?$/u
@@ -661,7 +1363,7 @@ function findAbstractBounds(lines, language) {
   }
 
   if (start < 0 || start >= lines.length) {
-    return null;
+    return findAbstractBoundsWithoutHeading(lines, language);
   }
 
   let end = lines.length;
@@ -692,16 +1394,32 @@ function findAbstractBounds(lines, language) {
     start,
     end,
     headingIndex,
-    endMode
+    endMode,
+    trigger: 'heading'
   };
 }
 
 function normalizeJapaneseAbstract(lines) {
-  return lines
+  const normalizedLines = lines
     .map((line) => String(line || '').trim())
-    .filter(Boolean)
-    .join('')
-    .replace(/\s+/g, '');
+    .filter(Boolean);
+
+  let out = '';
+  for (const line of normalizedLines) {
+    if (!out) {
+      out = line;
+      continue;
+    }
+
+    if (/[A-Za-z0-9]$/.test(out) || /^[A-Za-z0-9]/.test(line)) {
+      out += ` ${line}`;
+      continue;
+    }
+
+    out += line;
+  }
+
+  return out;
 }
 
 function normalizeEnglishAbstract(lines) {
@@ -783,6 +1501,7 @@ function extractAbstractFromLines(inputLines, options = {}) {
   if (debug) {
     debug(
       `abstract extracted from ${source}; language=${language}; headingLine=${bounds.headingIndex}; ` +
+      `trigger=${bounds.trigger || 'unknown'}; ` +
       `start=${bounds.start}; end=${bounds.end}; endMode=${bounds.endMode}; ` +
       `selectedLines=${selectedLines.length}; chars=${abstractText.length}`
     );
@@ -1015,6 +1734,47 @@ async function getFirstPageCandidateFromFulltext(attachmentID, debug = null) {
   }
 }
 
+async function getFirstPageLinesForAttachment(attachment, debug = null) {
+  if (!attachment || !attachment.id) {
+    return [];
+  }
+
+  const fromPdfWorker = await getFirstPageCandidateFromPdfWorker(attachment.id, debug);
+  if (fromPdfWorker) {
+    if (Array.isArray(fromPdfWorker.items) && fromPdfWorker.items.length > 0) {
+      const lines = extractLinesFromPositionedItems(fromPdfWorker.items, fromPdfWorker.width);
+      if (lines.length > 0) {
+        return lines;
+      }
+    }
+    if (fromPdfWorker.text) {
+      const lines = fromPdfWorker.text.split(/\n+/).map((line) => line.trim()).filter(Boolean);
+      if (lines.length > 0) {
+        return lines;
+      }
+    }
+  }
+
+  const fromFulltext = await getFirstPageCandidateFromFulltext(attachment.id, debug);
+  if (!fromFulltext || !fromFulltext.text) {
+    return [];
+  }
+  return fromFulltext.text.split(/\n+/).map((line) => line.trim()).filter(Boolean);
+}
+
+async function extractConferenceYearFromAttachment(attachment, debug = null) {
+  const lines = await getFirstPageLinesForAttachment(attachment, debug);
+  const merged = lines.join(' ').replace(/\s+/g, ' ').trim();
+  const hasConferenceMarker = merged.includes('言語処理学会');
+  const yearMatch = merged.match(ANLP_HEADER_YEAR_REGEX);
+  const year = yearMatch ? Number(yearMatch[1]) : null;
+
+  return {
+    hasConferenceMarker,
+    year: Number.isFinite(year) ? year : null
+  };
+}
+
 async function extractAbstractForAttachment(attachment, options = {}) {
   const debug = typeof options.debug === 'function' ? options.debug : null;
   if (!attachment || !attachment.id) {
@@ -1047,6 +1807,21 @@ async function extractAbstractForAttachment(attachment, options = {}) {
       });
       if (parsed && parsed.text) {
         return parsed.text;
+      }
+
+      const fullWidthLines = extractLinesFromPositionedItems(fromPdfWorker.items, null);
+      if (debug) {
+        debug(
+          `PDFWorker positioned full-page lines=${fullWidthLines.length}; ` +
+          `preview="${previewLines(fullWidthLines)}"`
+        );
+      }
+      const fullWidthParsed = extractAbstractFromLines(fullWidthLines, {
+        debug,
+        source: 'PDFWorker-positioned-full-page'
+      });
+      if (fullWidthParsed && fullWidthParsed.text) {
+        return fullWidthParsed.text;
       }
     }
 
@@ -1091,6 +1866,116 @@ async function extractAbstractForAttachment(attachment, options = {}) {
   return parsed ? parsed.text : null;
 }
 
+async function ensureJapaneseNameLexiconLoaded() {
+  if (jpNameLexiconLoaded) {
+    return;
+  }
+  if (jpNameLexiconLoadPromise) {
+    await jpNameLexiconLoadPromise;
+    return;
+  }
+
+  jpNameLexiconLoadPromise = (async () => {
+    if (!addonRootURI || typeof fetch !== 'function') {
+      return;
+    }
+
+    try {
+      const url = `${addonRootURI}src/data/japaneseNameLexicon.json`;
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const json = await response.json();
+      const surnames = Array.isArray(json.surnames) ? json.surnames : [];
+      const givenNames = Array.isArray(json.givenNames) ? json.givenNames : [];
+
+      jpSurnameSet.clear();
+      jpGivenNameSet.clear();
+      for (const name of surnames) {
+        if (JAPANESE_NAME_REGEX.test(String(name))) {
+          jpSurnameSet.add(String(name));
+        }
+      }
+      for (const name of givenNames) {
+        if (JAPANESE_NAME_REGEX.test(String(name))) {
+          jpGivenNameSet.add(String(name));
+        }
+      }
+
+      jpNameLexiconLoaded = true;
+      log(
+        `[name] loaded Japanese name lexicon surnames=${jpSurnameSet.size} ` +
+          `givenNames=${jpGivenNameSet.size}`
+      );
+    } catch (error) {
+      log('[name] failed to load Japanese name lexicon; using fallback behavior', error);
+    }
+  })();
+
+  await jpNameLexiconLoadPromise;
+}
+
+function getNameLengthPriorityScore(totalLength, familyLength, givenLength) {
+  const pairs = NAME_LENGTH_PRIOR[totalLength] || [];
+  const idx = pairs.findIndex((pair) => pair[0] === familyLength && pair[1] === givenLength);
+  if (idx >= 0) {
+    return pairs.length - idx;
+  }
+
+  const balanced = -Math.abs(familyLength - givenLength);
+  const familyBias = familyLength >= 2 && familyLength <= 3 ? 0.25 : 0;
+  return balanced + familyBias;
+}
+
+function splitJapaneseName(name) {
+  if (!jpNameLexiconLoaded || !JAPANESE_NAME_REGEX.test(name) || name.length <= 1) {
+    return null;
+  }
+
+  const candidates = [];
+  for (let i = 1; i < name.length; i += 1) {
+    const family = name.slice(0, i);
+    const given = name.slice(i);
+    if (!jpSurnameSet.has(family) || !jpGivenNameSet.has(given)) {
+      continue;
+    }
+    candidates.push({
+      family,
+      given,
+      score: getNameLengthPriorityScore(name.length, family.length, given.length)
+    });
+  }
+
+  if (candidates.length > 0) {
+    candidates.sort((a, b) => (
+      b.score - a.score ||
+      Math.abs(a.family.length - a.given.length) - Math.abs(b.family.length - b.given.length) ||
+      b.family.length - a.family.length
+    ));
+    return {
+      lastName: candidates[0].family,
+      firstName: candidates[0].given,
+      method: 'dictionary_pair'
+    };
+  }
+
+  for (let i = name.length - 1; i >= 1; i -= 1) {
+    const family = name.slice(0, i);
+    const given = name.slice(i);
+    if (!jpSurnameSet.has(family)) {
+      continue;
+    }
+    return {
+      lastName: family,
+      firstName: given,
+      method: 'greedy_surname'
+    };
+  }
+
+  return null;
+}
+
 function toCreator(name) {
   if (!name) {
     return null;
@@ -1119,11 +2004,27 @@ function toCreator(name) {
     };
   }
 
+  if (getSplitNoSpaceUsingEnamdict() && JAPANESE_NAME_REGEX.test(cleaned) && cleaned.length > 1) {
+    const split = splitJapaneseName(cleaned);
+    if (split) {
+      return {
+        firstName: split.firstName,
+        lastName: split.lastName,
+        creatorType: 'author'
+      };
+    }
+  }
+
   return {
     firstName: '',
     lastName: cleaned,
     creatorType: 'author'
   };
+}
+
+function inferLanguageFromTitle(title) {
+  const text = String(title || '');
+  return /[\u3040-\u30ff\u3400-\u9fff]/.test(text) ? 'ja' : 'en';
 }
 
 function buildExtra(paper) {
@@ -1193,8 +2094,10 @@ function shouldForceReplacePlace(existingPlace) {
 async function createParent(attachment, paper, conference) {
   const parent = new Zotero.Item('conferencePaper');
   parent.libraryID = attachment.libraryID;
+  const title = paper.title || paper.paperId;
 
-  parent.setField('title', paper.title || paper.paperId);
+  parent.setField('title', title);
+  parent.setField('language', inferLanguageFromTitle(title));
   parent.setField('date', String(paper.year));
   parent.setField('conferenceName', conference.conferenceName);
   parent.setField('proceedingsTitle', conference.proceedingsTitle);
@@ -1231,9 +2134,26 @@ async function upsertParent(attachment, paper, conference, overwriteMode) {
     return;
   }
 
-  if (shouldUpdateField(parent, 'title', paper.title, overwriteMode) ||
-    shouldForceReplaceTitle(parent.getField('title'))) {
-    parent.setField('title', paper.title || paper.paperId);
+  const existingTitle = parent.getField('title');
+  const incomingTitle = paper.title || paper.paperId;
+  const incomingLanguage = inferLanguageFromTitle(incomingTitle);
+  const shouldUpdateTitle = shouldUpdateField(parent, 'title', paper.title, overwriteMode);
+  const forceReplaceTitle = shouldForceReplaceTitle(existingTitle);
+  log(
+    `[upsert] item=${parent.id || 'unknown'} paperId=${paper.paperId || 'unknown'} ` +
+    `mode=${overwriteMode} title existing="${debugValue(existingTitle)}" ` +
+    `incoming="${debugValue(incomingTitle)}" ` +
+    `shouldUpdate=${shouldUpdateTitle} forceReplace=${forceReplaceTitle}`
+  );
+  if (shouldUpdateTitle || forceReplaceTitle) {
+    parent.setField('title', incomingTitle);
+  }
+  if (
+    shouldUpdateField(parent, 'language', incomingLanguage, overwriteMode) ||
+    shouldUpdateTitle ||
+    forceReplaceTitle
+  ) {
+    parent.setField('language', incomingLanguage);
   }
   if (shouldUpdateField(parent, 'date', String(paper.year), overwriteMode)) {
     parent.setField('date', String(paper.year));
@@ -1260,13 +2180,24 @@ async function upsertParent(attachment, paper, conference, overwriteMode) {
     parent.setField('abstractNote', paper.abstractNote);
   }
 
-  if (overwriteMode === 'overwrite' || !parent.getField('extra')) {
+  const existingExtra = parent.getField('extra');
+  const shouldUpdateExtra = overwriteMode === 'overwrite' || !existingExtra;
+  log(
+    `[upsert] item=${parent.id || 'unknown'} extra existing="${debugValue(existingExtra)}" ` +
+    `incoming="${debugValue(buildExtra(paper))}" shouldUpdate=${shouldUpdateExtra}`
+  );
+  if (shouldUpdateExtra) {
     parent.setField('extra', buildExtra(paper));
   }
 
   if (paper.authors && paper.authors.length > 0) {
     const existingCreators = parent.getCreators();
-    if (overwriteMode === 'overwrite' || existingCreators.length === 0) {
+    const shouldUpdateCreators = overwriteMode === 'overwrite' || existingCreators.length === 0;
+    log(
+      `[upsert] item=${parent.id || 'unknown'} creators existingCount=${existingCreators.length} ` +
+      `incomingCount=${paper.authors.length} shouldUpdate=${shouldUpdateCreators}`
+    );
+    if (shouldUpdateCreators) {
       parent.setCreators(paper.authors.map(toCreator).filter(Boolean));
     }
   }
@@ -1348,27 +2279,46 @@ async function toPdfAttachments(selectedItems) {
 }
 
 async function enrichAttachments(attachments) {
-  const defaultYear = getDefaultYear();
   const overwriteMode = getOverwriteMode();
   const extractAbstract = getExtractAbstract();
+  await ensureJapaneseNameLexiconLoaded();
+  log(
+    `[enrich] start selected=${attachments.length} overwriteMode=${overwriteMode} ` +
+    `extractAbstract=${extractAbstract}`
+  );
 
-  let updated = 0;
-  let skipped = 0;
-  let errors = 0;
+  const result = {
+    updated: 0,
+    skipped: 0,
+    errors: 0,
+    totalSelected: attachments.length,
+    problems: []
+  };
+  const pendingManualYear = [];
 
-  for (const attachment of attachments) {
+  async function processIdentifiedAttachment(identified) {
     try {
-      const identified = await identifyAttachment(attachment, defaultYear);
-      if (!identified.paperId || !identified.year) {
-        skipped += 1;
-        continue;
+      const attachment = identified.attachment;
+      let data = await getYearData(identified.year);
+      let paper = data.papers.find((x) => x.paperId === identified.paperId);
+      let retried = false;
+      if (!paper || shouldRetryWithFreshYearData(paper)) {
+        retried = true;
+        log(
+          `[enrich] refreshing year=${identified.year} for paperId=${identified.paperId} ` +
+          `reason=${paper ? 'suspicious_cached_metadata' : 'paper_not_found'}`
+        );
+        data = await getYearData(identified.year, true);
+        paper = data.papers.find((x) => x.paperId === identified.paperId);
       }
-
-      const data = await getYearData(identified.year);
-      const paper = data.papers.find((x) => x.paperId === identified.paperId);
       if (!paper) {
-        skipped += 1;
-        continue;
+        result.skipped += 1;
+        result.problems.push(buildAttachmentIssue(
+          identified,
+          'paper_not_found',
+          `No ANLP entry found for ${identified.paperId} in year ${identified.year}`
+        ));
+        return;
       }
 
       const debug = (message) => {
@@ -1379,6 +2329,13 @@ async function enrichAttachments(attachments) {
           `title="${String(title || '').slice(0, 120)}" ${message}`
         );
       };
+      if (retried) {
+        log(
+          `[enrich] refreshed paper metadata paperId=${paper.paperId} ` +
+          `title="${debugValue(paper.title)}" rawAuthors="${debugValue(paper.rawAuthors)}" ` +
+          `authorsCount=${Array.isArray(paper.authors) ? paper.authors.length : 0}`
+        );
+      }
 
       if (!extractAbstract) {
         debug('skipped extraction because extensions.zotanlp.extractAbstract=false');
@@ -1389,20 +2346,82 @@ async function enrichAttachments(attachments) {
       if (extractAbstract) {
         debug(`final abstract result: ${abstractNote ? `chars=${abstractNote.length}` : 'empty'}`);
       }
+
       await upsertParent(
         attachment,
         { ...paper, abstractNote: abstractNote || '' },
         data.conference,
         overwriteMode
       );
-      updated += 1;
+      result.updated += 1;
     } catch (error) {
-      errors += 1;
+      result.errors += 1;
+      result.problems.push(buildAttachmentIssue(
+        identified,
+        'processing_error',
+        `Processing failed: ${error.message || String(error)}`
+      ));
       log('Enrich failed for attachment', error);
     }
   }
 
-  return { updated, skipped, errors };
+  for (const attachment of attachments) {
+    try {
+      const identified = await identifyAttachmentForEnrich(attachment);
+      if (identified.eligible) {
+        await processIdentifiedAttachment(identified);
+        continue;
+      }
+
+      if (identified.manualYearCandidate) {
+        pendingManualYear.push(identified);
+        continue;
+      }
+
+      result.skipped += 1;
+      result.problems.push(identified);
+    } catch (error) {
+      result.errors += 1;
+      const meta = await getAttachmentMeta(attachment).catch(() => ({
+        itemID: attachment ? attachment.id : null,
+        displayName: `Item ${attachment && attachment.id ? attachment.id : 'unknown'}`,
+        fileName: '',
+        title: '',
+        url: ''
+      }));
+      result.problems.push(buildAttachmentIssue(
+        meta,
+        'identification_error',
+        `Identification failed: ${error.message || String(error)}`
+      ));
+      log('Identify failed for attachment', error);
+    }
+  }
+
+  if (pendingManualYear.length > 0) {
+    const manualYear = promptManualYearForUnresolved(pendingManualYear);
+    if (!manualYear) {
+      for (const item of pendingManualYear) {
+        result.skipped += 1;
+        result.problems.push(buildAttachmentIssue(
+          item,
+          'manual_year_cancelled',
+          'User canceled manual year search'
+        ));
+      }
+    } else {
+      for (const item of pendingManualYear) {
+        await processIdentifiedAttachment({
+          ...item,
+          year: manualYear,
+          source: 'manual_year',
+          eligible: true
+        });
+      }
+    }
+  }
+
+  return result;
 }
 
 async function enrichSelected() {
@@ -1411,10 +2430,82 @@ async function enrichSelected() {
   return enrichAttachments(attachments);
 }
 
+function getPromptService() {
+  if (typeof Services !== 'undefined' && Services.prompt) {
+    return Services.prompt;
+  }
+  return null;
+}
+
+function promptManualYearForUnresolved(items) {
+  const prompt = getPromptService();
+  if (!prompt || typeof prompt.confirmEx !== 'function' || typeof prompt.prompt !== 'function') {
+    return null;
+  }
+
+  const names = items.map((item) => `- ${item.displayName}`).join('\n');
+  const choice = prompt.confirmEx(
+    null,
+    PLUGIN_TITLE,
+    `Could not determine conference/year for the following files:\n\n${names}\n\n` +
+      'Choose "Search in a Year" to retry all of them with one year.',
+    prompt.BUTTON_POS_0 * prompt.BUTTON_TITLE_CANCEL +
+      prompt.BUTTON_POS_1 * prompt.BUTTON_TITLE_IS_STRING,
+    null,
+    'Search in a Year',
+    null,
+    null,
+    {}
+  );
+
+  if (choice !== 1) {
+    return null;
+  }
+
+  while (true) {
+    const input = { value: String(new Date().getFullYear()) };
+    const accepted = prompt.prompt(
+      null,
+      PLUGIN_TITLE,
+      'Enter year for manual metadata search (example: 2026):',
+      input,
+      null,
+      {}
+    );
+    if (!accepted) {
+      return null;
+    }
+
+    const year = Number(String(input.value || '').trim());
+    if (Number.isFinite(year) && year >= 2000 && year <= 2100) {
+      return year;
+    }
+    notify('Invalid year. Enter a 4-digit year between 2000 and 2100, or Cancel.');
+  }
+}
+
+function formatEnrichResultMessage(result) {
+  const lines = [];
+  lines.push(`Updated: ${result.updated}`);
+  lines.push(`Skipped: ${result.skipped}`);
+  lines.push(`Errors: ${result.errors}`);
+  lines.push(`Selected PDFs: ${result.totalSelected}`);
+
+  if (result.problems && result.problems.length > 0) {
+    lines.push('');
+    lines.push('Problematic files:');
+    for (const problem of result.problems) {
+      lines.push(`- ${problem.displayName}: ${problem.reason}`);
+    }
+  }
+
+  return lines.join('\n');
+}
+
 async function onEnrichSelected() {
   try {
     const result = await enrichSelected();
-    notify(`Updated: ${result.updated}, skipped: ${result.skipped}, errors: ${result.errors}`);
+    notify(formatEnrichResultMessage(result));
   } catch (error) {
     log('Manual enrich command failed', error);
     notify(`Failed: ${error.message || String(error)}`);
@@ -1445,6 +2536,40 @@ function buildMenuItem(doc, id) {
   return item;
 }
 
+function setMenuItemsEnabled(enabled) {
+  const disabled = !enabled;
+  for (const item of [toolsMenuItem, contextMenuItem]) {
+    if (!item) {
+      continue;
+    }
+    if (disabled) {
+      item.setAttribute('disabled', 'true');
+    } else {
+      item.removeAttribute('disabled');
+    }
+  }
+}
+
+async function updateMenuEnabledState() {
+  const token = ++menuStateToken;
+  setMenuItemsEnabled(false);
+  try {
+    const selected = getSelectedItems();
+    const attachments = await toPdfAttachments(selected);
+    const enabled = attachments.some((attachment) => seemsAnlpAttachmentQuick(attachment));
+    if (token !== menuStateToken) {
+      return;
+    }
+    setMenuItemsEnabled(enabled);
+  } catch (error) {
+    log('Failed to update menu state', error);
+    if (token !== menuStateToken) {
+      return;
+    }
+    setMenuItemsEnabled(false);
+  }
+}
+
 function registerMenuItems() {
   const win = getMainWindow();
   if (!win || !win.document) {
@@ -1460,11 +2585,14 @@ function registerMenuItems() {
     'menupopup[id*="Tools"]'
   );
   if (toolsMenuPopup) {
+    toolsMenuPopupNode = toolsMenuPopup;
     const existingTools = doc.getElementById('zotanlp-enrich-selected-tools');
     toolsMenuItem = existingTools || buildMenuItem(doc, 'zotanlp-enrich-selected-tools');
     if (!existingTools) {
       toolsMenuPopup.appendChild(toolsMenuItem);
     }
+    toolsMenuPopup.removeEventListener('popupshowing', updateMenuEnabledState);
+    toolsMenuPopup.addEventListener('popupshowing', updateMenuEnabledState);
     registeredAny = true;
   }
 
@@ -1474,12 +2602,19 @@ function registerMenuItems() {
     'menupopup[id*="itemmenu"], menupopup[id*="context"]'
   );
   if (contextMenuPopup) {
+    contextMenuPopupNode = contextMenuPopup;
     const existingContext = doc.getElementById('zotanlp-enrich-selected-context');
     contextMenuItem = existingContext || buildMenuItem(doc, 'zotanlp-enrich-selected-context');
     if (!existingContext) {
       contextMenuPopup.appendChild(contextMenuItem);
     }
+    contextMenuPopup.removeEventListener('popupshowing', updateMenuEnabledState);
+    contextMenuPopup.addEventListener('popupshowing', updateMenuEnabledState);
     registeredAny = true;
+  }
+
+  if (registeredAny) {
+    void updateMenuEnabledState();
   }
 
   return registeredAny;
@@ -1508,6 +2643,15 @@ function unregisterMenus() {
     menuRetryTimer = null;
   }
   menuRetryCount = 0;
+
+  if (toolsMenuPopupNode) {
+    toolsMenuPopupNode.removeEventListener('popupshowing', updateMenuEnabledState);
+    toolsMenuPopupNode = null;
+  }
+  if (contextMenuPopupNode) {
+    contextMenuPopupNode.removeEventListener('popupshowing', updateMenuEnabledState);
+    contextMenuPopupNode = null;
+  }
 
   if (toolsMenuItem && toolsMenuItem.parentNode) {
     toolsMenuItem.parentNode.removeChild(toolsMenuItem);
@@ -1638,6 +2782,7 @@ function uninstall() {}
 function startup(data) {
   migrateAndInitializePrefs();
   addonRootURI = normalizeRootURI(data);
+  registerPublicApi();
   if (!registerMenuItems()) {
     scheduleMenuRetry();
   }
@@ -1649,4 +2794,5 @@ function shutdown() {
   unregisterMenus();
   unregisterNotifier();
   unregisterPrefsPane();
+  unregisterPublicApi();
 }

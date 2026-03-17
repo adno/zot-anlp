@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "ZotANLP",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Enrich imported ANLP PDFs with metadata",
   "author": "ZotANLP",
   "applications": {

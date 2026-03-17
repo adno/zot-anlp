@@ -3,7 +3,6 @@ const { getYearData } = require('../services/anlpClient');
 const { ensureParentConferencePaper } = require('../services/zoteroMapper');
 const { extractAbstractForAttachment } = require('../services/abstractExtractor');
 const {
-  getDefaultYear,
   getOverwriteMode,
   getExtractAbstract
 } = require('../prefs');
@@ -93,7 +92,6 @@ async function toPdfAttachments(selectedItems) {
 }
 
 async function enrichAttachments(attachments) {
-  const defaultYear = getDefaultYear();
   const overwriteMode = getOverwriteMode();
   const extractAbstract = getExtractAbstract();
 
@@ -103,7 +101,7 @@ async function enrichAttachments(attachments) {
 
   for (const attachment of attachments) {
     try {
-      const identified = await identifyAttachment(attachment, defaultYear);
+      const identified = await identifyAttachment(attachment);
       if (!identified.paperId) {
         skipped += 1;
         continue;

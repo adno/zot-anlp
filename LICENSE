@@ -22,3 +22,18 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
  OTHER DEALINGS IN THE SOFTWARE.
 
 For more information, please refer to <https://unlicense.org>
+
+---
+
+Third-party dictionary data notice:
+
+This project bundles a derived Japanese surname/given-name lexicon in
+`src/data/japaneseNameLexicon.json`, generated from ENAMDICT/JMnedict data by
+the Electronic Dictionary Research and Development Group (EDRDG):
+<https://www.edrdg.org/>
+
+Per EDRDG's dictionary license statement, dictionary files and derived data
+files are licensed under Creative Commons Attribution-ShareAlike 4.0
+International (CC BY-SA 4.0):
+<https://www.edrdg.org/edrdg/licence.html>
+<https://creativecommons.org/licenses/by-sa/4.0/>

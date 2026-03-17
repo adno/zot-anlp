@@ -14,6 +14,8 @@ function stripTags(html) {
 function normalizeAuthorToken(token) {
   return token
     .replace(/^[○〇\*]+/, '')
+    .replace(/（[^）]*）/g, '')
+    .replace(/\([^)]*\)/g, '')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -48,12 +50,20 @@ function splitAuthorsAndTitle(text) {
   return { authors: [], title: cleaned };
 }
 
+function stripPageRangeNote(text) {
+  return String(text || '')
+    .replace(/[（(]\s*pp?\.\s*\d+\s*[-–—~〜]\s*\d+\s*[)）]/ig, ' ')
+    .replace(/[（(]\s*pp?\.\s*\d+\s*[)）]/ig, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function normalizeTitle(title, paperId) {
   if (!title) {
     return paperId;
   }
 
-  return title
+  return stripPageRangeNote(title)
     .replace(/\bPDF\b/gi, '')
     .replace(/\(\s*pdf\s*\)/gi, '')
     .replace(/\s+/g, ' ')
@@ -88,7 +98,7 @@ function parseAuthorsAndTitleFromContext(contextText, paperId) {
     ? compact.slice((idMatch.index || 0) + paperId.length).trim()
     : compact;
 
-  const cleaned = afterId
+  const cleaned = stripPageRangeNote(afterId)
     .replace(/\b(pdf|download)\b/gi, '')
     .replace(/\s+/g, ' ')
     .trim();
@@ -102,7 +112,7 @@ function parseAuthorsAndTitleFromContext(contextText, paperId) {
 
 function parseProgramHtml(html, year) {
   const papers = [];
-  const re = /<a[^>]*href=["']([^"']*pdf_dir\/([A-Z]{1,2}\d-\d{1,2})\.pdf(?:\?[^"']*)?)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  const re = /<a[^>]*href=["']([^"']*pdf_dir\/([A-Z]{1,2}\d{1,2}-\d{1,2})\.pdf(?:\?[^"']*)?)["'][^>]*>([\s\S]*?)<\/a>/gi;
 
   let match;
   while ((match = re.exec(html)) !== null) {

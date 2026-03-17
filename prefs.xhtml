@@ -16,6 +16,10 @@
     min-width: 220px;
   }
 
+  .zotanlp-row--check > label {
+    min-width: 0;
+  }
+
   .zotanlp-help {
     color: color-mix(in srgb, currentColor 70%, transparent);
     margin-top: 10px;
@@ -25,25 +29,13 @@
 <groupbox class='zotanlp-pref-group'>
   <caption label='General' />
 
-  <hbox align='center' class='zotanlp-row'>
-    <label value='Auto enrich new PDFs' />
+  <hbox align='center' class='zotanlp-row zotanlp-row--check'>
     <checkbox preference='extensions.zotanlp.autoEnrich' />
+    <label value='Automatically add metadata to newly added PDFs' />
   </hbox>
 
   <hbox align='center' class='zotanlp-row'>
-    <label value='Default year' />
-    <html:input
-      type='number'
-      min='2000'
-      max='2100'
-      step='1'
-      preference='extensions.zotanlp.defaultYear'
-      style='width: 90px;'
-    />
-  </hbox>
-
-  <hbox align='center' class='zotanlp-row'>
-    <label value='Overwrite mode' />
+    <label value='If an item already has metadata:' />
     <menulist preference='extensions.zotanlp.overwriteMode'>
       <menupopup>
         <menuitem value='missing' label='Fill missing fields only' />
@@ -52,12 +44,30 @@
     </menulist>
   </hbox>
 
-  <hbox align='center' class='zotanlp-row'>
-    <label value='Extract abstract from PDF' />
+  <hbox align='center' class='zotanlp-row zotanlp-row--check'>
     <checkbox preference='extensions.zotanlp.extractAbstract' />
+    <label value='Extract abstracts from PDFs' />
+  </hbox>
+
+  <hbox align='center' class='zotanlp-row zotanlp-row--check'>
+    <checkbox preference='extensions.zotanlp.splitNoSpaceUsingEnamdict' />
+    <label value='Split author names without spaces using ENAMDICT' />
+  </hbox>
+
+  <hbox align='center' class='zotanlp-row'>
+    <label value='ANLP metadata cache' />
+    <button
+      label='Clear Cache'
+      oncommand="if (Zotero &amp;&amp; Zotero.ZotANLP &amp;&amp; Zotero.ZotANLP.clearCacheFromPrefs) { Zotero.ZotANLP.clearCacheFromPrefs(); }"
+    />
   </hbox>
 
   <html:p class='zotanlp-help'>
     Extraction debug logs are always written to Zotero Debug Output.
+  </html:p>
+
+  <html:p class='zotanlp-help'>
+    Name splitting uses ENAMDICT/JMnedict data by EDRDG (CC BY-SA 4.0).
+    See README and LICENSE for attribution and terms.
   </html:p>
 </groupbox>

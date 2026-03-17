@@ -29,6 +29,59 @@ function isSectionHeading(line, language, preferDefaultTitle) {
   return /^1[\s.]+\S+/.test(normalized);
 }
 
+function containsEmailAddress(line) {
+  return /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.test(String(line || ''));
+}
+
+function findAbstractBoundsWithoutHeading(lines, language) {
+  const maxEmailScan = Math.min(lines.length, 40);
+  let emailIndex = -1;
+  for (let i = 0; i < maxEmailScan; i += 1) {
+    if (containsEmailAddress(lines[i])) {
+      emailIndex = i;
+      break;
+    }
+  }
+
+  if (emailIndex < 0 || emailIndex + 1 >= lines.length) {
+    return null;
+  }
+
+  const start = emailIndex + 1;
+  let end = lines.length;
+  let endMode = 'none';
+
+  for (let i = start; i < lines.length; i += 1) {
+    if (isSectionHeading(lines[i], language, true)) {
+      end = i;
+      endMode = 'preferred';
+      break;
+    }
+  }
+
+  if (end === lines.length) {
+    for (let i = start; i < lines.length; i += 1) {
+      if (isSectionHeading(lines[i], language, false)) {
+        end = i;
+        endMode = 'fallback';
+        break;
+      }
+    }
+  }
+
+  if (end <= start || end - start > 20) {
+    return null;
+  }
+
+  return {
+    start,
+    end,
+    headingIndex: -1,
+    endMode: `${endMode}-no-heading`,
+    trigger: 'email'
+  };
+}
+
 function findAbstractBounds(lines, language) {
   const headingPattern = language === 'ja'
     ? /^概要(?:\s*[:：]\s*(.*))?$/u
@@ -56,7 +109,7 @@ function findAbstractBounds(lines, language) {
   }
 
   if (start < 0 || start >= lines.length) {
-    return null;
+    return findAbstractBoundsWithoutHeading(lines, language);
   }
 
   let end = lines.length;
@@ -87,16 +140,32 @@ function findAbstractBounds(lines, language) {
     start,
     end,
     headingIndex,
-    endMode
+    endMode,
+    trigger: 'heading'
   };
 }
 
 function normalizeJapaneseAbstract(lines) {
-  return lines
+  const normalizedLines = lines
     .map((line) => String(line || '').trim())
-    .filter(Boolean)
-    .join('')
-    .replace(/\s+/g, '');
+    .filter(Boolean);
+
+  let out = '';
+  for (const line of normalizedLines) {
+    if (!out) {
+      out = line;
+      continue;
+    }
+
+    if (/[A-Za-z0-9]$/.test(out) || /^[A-Za-z0-9]/.test(line)) {
+      out += ` ${line}`;
+      continue;
+    }
+
+    out += line;
+  }
+
+  return out;
 }
 
 function normalizeEnglishAbstract(lines) {
@@ -185,6 +254,7 @@ function extractAbstractFromLines(inputLines, options = {}) {
   if (debug) {
     debug(
       `abstract extracted from ${source}; language=${language}; headingLine=${bounds.headingIndex}; ` +
+      `trigger=${bounds.trigger || 'unknown'}; ` +
       `start=${bounds.start}; end=${bounds.end}; endMode=${bounds.endMode}; ` +
       `selectedLines=${selectedLines.length}; chars=${abstractText.length}`
     );
@@ -424,6 +494,15 @@ async function extractAbstractForAttachment(attachment, options = {}) {
       });
       if (parsed && parsed.text) {
         return parsed.text;
+      }
+
+      const fullWidthLines = extractLinesFromPositionedItems(fromPdfWorker.items, null);
+      const fullWidthParsed = extractAbstractFromLines(fullWidthLines, {
+        debug,
+        source: 'PDFWorker-positioned-full-page'
+      });
+      if (fullWidthParsed && fullWidthParsed.text) {
+        return fullWidthParsed.text;
       }
     }
 

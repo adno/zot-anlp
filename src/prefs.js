@@ -1,8 +1,8 @@
 const DEFAULTS = {
-  defaultYear: new Date().getFullYear(),
   overwriteMode: 'missing',
   autoEnrich: true,
-  extractAbstract: true
+  extractAbstract: true,
+  splitNoSpaceUsingEnamdict: true
 };
 
 function getPref(key, fallback) {
@@ -15,14 +15,37 @@ function getPref(key, fallback) {
   return value === undefined || value === null || value === '' ? fallback : value;
 }
 
-function getDefaultYear() {
-  const year = Number(getPref('defaultYear', DEFAULTS.defaultYear));
-  return Number.isFinite(year) ? year : DEFAULTS.defaultYear;
-}
-
 function getOverwriteMode() {
-  const mode = getPref('overwriteMode', DEFAULTS.overwriteMode);
-  return mode === 'overwrite' ? 'overwrite' : 'missing';
+  const normalizeMode = (value) => {
+    if (value === 'overwrite' || value === true || value === 1) {
+      return 'overwrite';
+    }
+    const text = String(value || '').trim().toLowerCase();
+    if (text === 'overwrite' || text === 'true' || text === '1' || text === 'yes' || text === 'on') {
+      return 'overwrite';
+    }
+    if (text === 'missing' || text === 'false' || text === '0' || text === 'no' || text === 'off') {
+      return 'missing';
+    }
+    return null;
+  };
+
+  const current = getPref('overwriteMode', DEFAULTS.overwriteMode);
+  const currentMode = normalizeMode(current);
+  if (currentMode) {
+    return currentMode;
+  }
+
+  // Legacy namespace fallback for safety.
+  if (typeof Zotero !== 'undefined' && Zotero.Prefs) {
+    const legacy = Zotero.Prefs.get('extensions.zot-anlp-metadata.overwriteMode', true);
+    const legacyMode = normalizeMode(legacy);
+    if (legacyMode) {
+      return legacyMode;
+    }
+  }
+
+  return 'missing';
 }
 
 function getAutoEnrich() {
@@ -33,10 +56,14 @@ function getExtractAbstract() {
   return Boolean(getPref('extractAbstract', DEFAULTS.extractAbstract));
 }
 
+function getSplitNoSpaceUsingEnamdict() {
+  return Boolean(getPref('splitNoSpaceUsingEnamdict', DEFAULTS.splitNoSpaceUsingEnamdict));
+}
+
 module.exports = {
-  getDefaultYear,
   getOverwriteMode,
   getAutoEnrich,
   getExtractAbstract,
+  getSplitNoSpaceUsingEnamdict,
   DEFAULTS
 };

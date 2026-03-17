@@ -60,6 +60,24 @@ test('extractAbstractFromLines handles Japanese abstract and fallback section ti
   );
 });
 
+test('extractAbstractFromLines keeps intra-line spaces for Japanese and adds boundary spacing', () => {
+  const lines = [
+    '概要',
+    '近年,大規模言語モデル (Large Language Model, LLM)',
+    'BERT is used',
+    '評価を行った。',
+    '1 はじめに'
+  ];
+
+  const parsed = extractAbstractFromLines(lines);
+  assert.ok(parsed);
+  assert.equal(parsed.language, 'ja');
+  assert.equal(
+    parsed.text,
+    '近年,大規模言語モデル (Large Language Model, LLM) BERT is used 評価を行った。'
+  );
+});
+
 test('extractLinesFromPositionedItems keeps only left column items', () => {
   const items = [
     { str: 'Abstract', x: 40, y: 760, width: 40, height: 10 },
@@ -70,4 +88,24 @@ test('extractLinesFromPositionedItems keeps only left column items', () => {
 
   const lines = extractLinesFromPositionedItems(items, 600);
   assert.deepEqual(lines, ['Abstract', 'Left column']);
+});
+
+test('extractAbstractFromLines supports legacy layout without abstract heading', () => {
+  const lines = [
+    '言語処理学会第17回年次大会(NLP2011)',
+    '○浅石卓真, 影浦峡 (東大)',
+    'asaishi@p.u-tokyo.ac.jp',
+    '本研究では専門語彙を手がかりとした知識構成の展開方法を提案する。',
+    '生命科学分野を対象に評価し有効性を確認した。',
+    '1 はじめに',
+    '近年, 多様な知識獲得手法が提案されている。'
+  ];
+
+  const parsed = extractAbstractFromLines(lines);
+  assert.ok(parsed);
+  assert.equal(parsed.language, 'ja');
+  assert.equal(
+    parsed.text,
+    '本研究では専門語彙を手がかりとした知識構成の展開方法を提案する。生命科学分野を対象に評価し有効性を確認した。'
+  );
 });

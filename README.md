@@ -15,6 +15,12 @@ ZotANLP は、ANLP（言語処理学会）論文 PDF（例: `B2-3.pdf`）のメ�
 
 ### バージョン履歴
 
+- `v0.2.0`
+  - 空白なし日本語著者名の自動分割を追加（ENAMDICT ベース）
+  - 日本語要旨の空白処理を改善
+  - URL がない ANLP 論文の認識を改善（PDF から年を推定）
+  - 古い大会ページ形式への対応を改善（初期大会のサイト形式差異に対応）
+  - UI を改善（メニュー項目、ダイアログ）
 - `v0.1.0`
   - PDF 1ページ目からの要旨/Abstract 抽出を追加（日本語/英語対応）
   - `Settings -> ZotANLP` に設定パネルを追加
@@ -78,9 +84,6 @@ Zotero の Config Editor:
 - `extensions.zotanlp.autoEnrich`
   - `true` / `false`
   - 既定値: `true`
-- `extensions.zotanlp.defaultYear`
-  - 例: `2026`
-  - URL から年を判定できない場合に使用
 - `extensions.zotanlp.overwriteMode`
   - `missing` / `overwrite`
   - `missing`: 空欄のみ補完
@@ -93,7 +96,6 @@ Zotero の Config Editor:
 設定の使い分け:
 - 通常運用: `autoEnrich=true`, `overwriteMode=missing`
 - 既存データの修正を一括で反映したい時: 一時的に `overwriteMode=overwrite` に変更して実行後、`missing` に戻す
-- URL から年が取れない PDF がある場合: `defaultYear` を対象年（例: `2026`）に設定
 
 ### トラブルシューティング
 
@@ -129,6 +131,12 @@ ZotANLP is a Zotero plugin that enriches ANLP paper PDFs (Annual Meeting of the 
 
 ### Version History
 
+- `v0.2.0`
+  - Automatic splitting of Japanese names without spaces.
+  - Improved handling of whitespace in Japanese abstracts.
+  - Improved recognition of ANLP papers without URLs (year is read from the PDF).
+  - Improved support for earlier editions of the conference (different web site formats).
+  - Improved user interface (menu items, dialogs).
 - `v0.1.0`
   - Added first-page abstract extraction (Japanese and English)
   - Added a settings pane in `Settings -> ZotANLP`
@@ -181,18 +189,29 @@ In Zotero Config Editor:
 `Settings -> Advanced -> Config Editor`
 
 - `extensions.zotanlp.autoEnrich` (`true`/`false`, default `true`)
-- `extensions.zotanlp.defaultYear` (for example `2026`)
 - `extensions.zotanlp.overwriteMode` (`missing` or `overwrite`)
 - `extensions.zotanlp.extractAbstract` (`true`/`false`, default `true`)
 
 Recommended usage:
 - Day-to-day: `autoEnrich=true` and `overwriteMode=missing`
 - One-time metadata cleanup: switch to `overwriteMode=overwrite`, run once, then switch back to `missing`
-- If year cannot be detected from a PDF URL: set `defaultYear` to the target year (for example `2026`)
 
 ### License
 
 Public domain. See [LICENSE](./LICENSE).
+
+### Dictionary attribution
+
+- Japanese surname/given-name lexicon is derived from ENAMDICT/JMnedict by the
+  Electronic Dictionary Research and Development Group (EDRDG):
+  [https://www.edrdg.org/](https://www.edrdg.org/)
+- EDRDG dictionary files and derived data are licensed under
+  [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/)
+  per the EDRDG dictionary license statement:
+  [https://www.edrdg.org/edrdg/licence.html](https://www.edrdg.org/edrdg/licence.html)
+- Name-splitting behavior can be toggled in preferences:
+  `Split author names without spaces using ENAMDICT` (default: `true`).
+- See [LICENSE](./LICENSE) for third-party dictionary licensing notes.
 
 ## 開発者向け: ローカルビルド / Developer: Local Build
 
@@ -201,3 +220,5 @@ cd zot-anlp
 rm -f ZotANLP.xpi
 zip -r ZotANLP.xpi manifest.json bootstrap.js prefs.xhtml src README.md LICENSE
 ```
+
+`src` includes runtime assets such as `src/data/japaneseNameLexicon.json`, so the command above packages the full name lexicon.

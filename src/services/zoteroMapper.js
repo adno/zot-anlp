@@ -1,3 +1,11 @@
+const { splitJapaneseName } = require('./japaneseNameSplitter');
+const { getSplitNoSpaceUsingEnamdict } = require('../prefs');
+
+function inferLanguageFromTitle(title) {
+  const text = String(title || '');
+  return /[\u3040-\u30ff\u3400-\u9fff]/.test(text) ? 'ja' : 'en';
+}
+
 function toCreator(name) {
   if (!name) {
     return null;
@@ -15,6 +23,17 @@ function toCreator(name) {
       lastName: parts[0],
       creatorType: 'author'
     };
+  }
+
+  if (getSplitNoSpaceUsingEnamdict()) {
+    const jpSplit = splitJapaneseName(cleaned);
+    if (jpSplit) {
+      return {
+        firstName: jpSplit.firstName,
+        lastName: jpSplit.lastName,
+        creatorType: 'author'
+      };
+    }
   }
 
   return {
@@ -57,8 +76,10 @@ function refreshItemUI(itemID) {
 async function createParentItem(attachment, paper, conference) {
   const parent = new Zotero.Item('conferencePaper');
   parent.libraryID = attachment.libraryID;
+  const title = paper.title || paper.paperId;
 
-  parent.setField('title', paper.title || paper.paperId);
+  parent.setField('title', title);
+  parent.setField('language', inferLanguageFromTitle(title));
   parent.setField('date', String(paper.year));
   parent.setField('conferenceName', conference.conferenceName);
   parent.setField('proceedingsTitle', conference.proceedingsTitle);
@@ -94,8 +115,14 @@ function shouldUpdateField(parent, field, value, overwriteMode) {
 }
 
 async function updateParentItem(parent, paper, conference, overwriteMode = 'missing') {
+  const title = paper.title || paper.paperId;
+  const language = inferLanguageFromTitle(title);
+
   if (shouldUpdateField(parent, 'title', paper.title, overwriteMode)) {
-    parent.setField('title', paper.title || paper.paperId);
+    parent.setField('title', title);
+  }
+  if (shouldUpdateField(parent, 'language', language, overwriteMode)) {
+    parent.setField('language', language);
   }
   if (shouldUpdateField(parent, 'date', String(paper.year), overwriteMode)) {
     parent.setField('date', String(paper.year));
@@ -154,5 +181,6 @@ async function ensureParentConferencePaper(attachment, paper, conference, overwr
 
 module.exports = {
   ensureParentConferencePaper,
+  inferLanguageFromTitle,
   toCreator
 };

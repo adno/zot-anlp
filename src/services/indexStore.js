@@ -1,5 +1,5 @@
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const CACHE_FILE_NAME = 'zot-anlp-year-cache.json';
+const CACHE_FILE_NAME = 'zot-anlp-year-cache-v2.json';
 const byYear = new Map();
 
 let loadedFromDisk = false;
