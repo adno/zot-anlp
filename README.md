@@ -109,9 +109,11 @@ Zotero の Config Editor:
 ### リリースチェックリスト
 
 - `manifest.json` の version 更新
-- パッケージ再作成
-  - `zip -r ZotANLP.xpi manifest.json bootstrap.js prefs.xhtml src README.md LICENSE`
-- `.xpi` を再インストールして Zotero 再起動
+- リリースファイル作成
+  - `./build.sh`
+  - 生成物: `release/ZotANLP.xpi`, `release/updates.json`
+- GitHub Releases に `release/ZotANLP.xpi` と `release/updates.json` をアップロード
+- （ローカル確認時のみ）`.xpi` を再インストールして Zotero 再起動
 - 動作確認
   - Tools メニュー表示
   - 右クリックメニュー表示
@@ -217,8 +219,14 @@ Public domain. See [LICENSE](./LICENSE).
 
 ```bash
 cd zot-anlp
-rm -f ZotANLP.xpi
-zip -r ZotANLP.xpi manifest.json bootstrap.js prefs.xhtml src README.md LICENSE
+./build.sh
 ```
 
-`src` includes runtime assets such as `src/data/japaneseNameLexicon.json`, so the command above packages the full name lexicon.
+生成物 / Outputs:
+
+- `release/ZotANLP.xpi`
+- `release/updates.json`
+
+`build.sh` reads plugin metadata (`id`, `version`, `strict_min_version`, `strict_max_version`) from `manifest.json` and writes an update manifest that points to GitHub latest release assets (`https://github.com/adno/zot-anlp/releases/latest/download/...`).
+
+`src` includes runtime assets such as `src/data/japaneseNameLexicon.json`, so the package includes the full name lexicon.
