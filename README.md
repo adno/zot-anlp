@@ -15,6 +15,9 @@ ZotANLP は、ANLP（言語処理学会）論文 PDF（例: `B2-3.pdf`）のメ�
 
 ### バージョン履歴
 
+- `v0.2.1`
+  - GitHub Releases の `updates.json` を使ったプラグイン自動更新に対応
+  - `build.sh` を追加し、`release/ZotANLP.xpi` と `release/updates.json` を生成可能に
 - `v0.2.0`
   - 空白なし日本語著者名の自動分割を追加（ENAMDICT ベース）
   - 日本語要旨の空白処理を改善
@@ -133,6 +136,9 @@ ZotANLP is a Zotero plugin that enriches ANLP paper PDFs (Annual Meeting of the 
 
 ### Version History
 
+- `v0.2.1`
+  - Added plugin auto-update support using GitHub Releases `updates.json`
+  - Added `build.sh` to generate `release/ZotANLP.xpi` and `release/updates.json`
 - `v0.2.0`
   - Automatic splitting of Japanese names without spaces.
   - Improved handling of whitespace in Japanese abstracts.

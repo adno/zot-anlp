@@ -7,7 +7,7 @@
   "applications": {
     "zotero": {
       "id": "zot-anlp-metadata@local",
-      "update_url": "https://example.com/zot-anlp/updates.json",
+      "update_url": "https://github.com/adno/zot-anlp/releases/latest/download/updates.json",
       "strict_min_version": "7.0",
       "strict_max_version": "8.0.*"
     }
