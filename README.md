@@ -15,6 +15,8 @@ ZotANLP は、ANLP（言語処理学会）論文 PDF（例: `B2-3.pdf`）のメ�
 
 ### バージョン履歴
 
+- `v0.2.2`
+  - Zotero 9.0 系との互換性を宣言（`strict_max_version` を `9.0.*` に更新）
 - `v0.2.1`
   - GitHub Releases の `updates.json` を使ったプラグイン自動更新に対応
   - `build.sh` を追加し、`release/ZotANLP.xpi` と `release/updates.json` を生成可能に
@@ -31,7 +33,7 @@ ZotANLP は、ANLP（言語処理学会）論文 PDF（例: `B2-3.pdf`）のメ�
 
 ### 主な機能
 
-- `ZotANLP: Add Metadata From Web` を Tools メニューに追加
+- `ZotANLP: Add Metadata from Web` を Tools メニューに追加
 - 同じ項目をアイテム右クリックのコンテキストメニューにも追加
 - 新規 PDF 追加時の自動メタデータ付与（設定で有効/無効）
 - ANLP ID（`B2-3`, `Q6-2`, `C2-25` など）で論文を照合
@@ -44,13 +46,15 @@ ZotANLP は、ANLP（言語処理学会）論文 PDF（例: `B2-3.pdf`）のメ�
 - `Author`（○や所属情報を除去した著者名）
   - 英字名は `First Last`、日本語名は `姓 名` として解釈
 - `Date`（年）
+- `Language`（タイトル文字種から `ja` / `en` を推定）
 - `Proceedings Title`
 - `Publisher`
 - `Place`
 - `URL`（PDF URL）
+- `Abstract`（`extractAbstract=true` のとき）
 - `Extra`
   - `ANLP ID: ...`
-  - `Authors and Affiliations: ...`
+  - `Authors and Affiliations: ...`（抽出できた場合）
 
 補足:
 - `Conference Name` は意図的に空欄にします。
@@ -71,13 +75,17 @@ ZotANLP は、ANLP（言語処理学会）論文 PDF（例: `B2-3.pdf`）のメ�
 
 - 手動実行:
   - PDF 添付、または PDF を含む親アイテムを選択
-  - `ZotANLP: Add Metadata From Web` を実行
+  - `ZotANLP: Add Metadata from Web` を実行
 - 自動実行:
   - 有効時は新規追加 PDF を自動処理
+- URL から年を特定できない PDF:
+  - 一括で同じ年を指定して再検索するダイアログ（`Search in a Year`）を利用可能
 
 ### 設定
 
 `Settings -> ZotANLP` に設定パネルが追加されます。
+
+- `ANLP metadata cache -> Clear Cache` で年次データキャッシュを削除できます。
 
 ### 設定キー（Config Editor）
 
@@ -95,6 +103,10 @@ Zotero の Config Editor:
   - `true` / `false`
   - 既定値: `true`
   - `true`: PDF 1ページ目から要旨/Abstract を抽出して `Abstract` フィールドに設定
+- `extensions.zotanlp.splitNoSpaceUsingEnamdict`
+  - `true` / `false`
+  - 既定値: `true`
+  - `true`: 日本語著者名に空白がない場合、ENAMDICT 辞書を使って `姓 名` に分割
 
 設定の使い分け:
 - 通常運用: `autoEnrich=true`, `overwriteMode=missing`
@@ -102,12 +114,17 @@ Zotero の Config Editor:
 
 ### トラブルシューティング
 
-- 自動更新されない:
-  - `extensions.zotanlp.autoEnrich=true` を確認
-  - 最新 `.xpi` を再インストールして再起動
+- プラグイン更新が通知されない:
+  - インストール済みバージョン（`manifest.json` の `version`）を確認
+  - GitHub Releases に `ZotANLP.xpi` と `updates.json` が同じリリースとして公開されているか確認
+  - 必要なら最新 `.xpi` を再インストールして再起動
 - 古い誤情報が残る:
   - `extensions.zotanlp.overwriteMode=overwrite` にして一度実行
   - 必要なら `missing` に戻す
+- 年を自動判定できない PDF がある:
+  - ファイル名を `B2-3.pdf` 形式にする
+  - 1ページ目ヘッダに `言語処理学会` と年次情報があることを確認
+  - 実行時の `Search in a Year` ダイアログで年を指定して再検索
 
 ### リリースチェックリスト
 
@@ -120,7 +137,7 @@ Zotero の Config Editor:
 - 動作確認
   - Tools メニュー表示
   - 右クリックメニュー表示
-  - 新規 PDF の自動更新
+  - 新規 PDF の自動メタデータ付与
   - 既知論文（例: `B2-3`）で title/authors/proceedings/place が妥当
 - メタデータ仕様を変更した場合:
   - `bootstrap.js` のキャッシュファイル名バージョンを更新
@@ -136,6 +153,8 @@ ZotANLP is a Zotero plugin that enriches ANLP paper PDFs (Annual Meeting of the 
 
 ### Version History
 
+- `v0.2.2`
+  - Declared compatibility with Zotero 9.0.x by updating `strict_max_version` to `9.0.*`
 - `v0.2.1`
   - Added plugin auto-update support using GitHub Releases `updates.json`
   - Added `build.sh` to generate `release/ZotANLP.xpi` and `release/updates.json`
@@ -152,7 +171,7 @@ ZotANLP is a Zotero plugin that enriches ANLP paper PDFs (Annual Meeting of the 
 
 ### Features
 
-- Adds `ZotANLP: Add Metadata From Web` to the Tools menu
+- Adds `ZotANLP: Add Metadata from Web` to the Tools menu
 - Adds the same action to the item context menu
 - Supports automatic enrichment for newly added PDFs
 - Manual run can be executed from either a PDF attachment or a parent item that has PDF child attachments
@@ -166,13 +185,15 @@ ZotANLP is a Zotero plugin that enriches ANLP paper PDFs (Annual Meeting of the 
 - `Author` (cleaned names; presenter mark/affiliations removed)
   - Latin names are interpreted as `First Last`; Japanese names as `Last First`
 - `Date` (year)
+- `Language` (inferred from title script: `ja` or `en`)
 - `Proceedings Title`
 - `Publisher`
 - `Place`
 - `URL` (PDF URL)
+- `Abstract` (when `extractAbstract=true`)
 - `Extra`
   - `ANLP ID: ...`
-  - `Authors and Affiliations: ...`
+  - `Authors and Affiliations: ...` (when available)
 
 Notes:
 - `Conference Name` is intentionally left empty.
@@ -189,9 +210,18 @@ Notes:
 
 Local build instructions are at the end of this README.
 
+### Usage notes
+
+- Manual run: select a PDF attachment or a parent item with PDF children, then run
+  `ZotANLP: Add Metadata from Web`.
+- If year detection fails for URL-less files, the plugin can prompt once (`Search in a Year`)
+  and retry all unresolved files with the year you enter.
+
 ### Configuration keys
 
 ZotANLP settings are available in `Settings -> ZotANLP`.
+
+- `ANLP metadata cache -> Clear Cache` removes cached year data.
 
 In Zotero Config Editor:
 `Settings -> Advanced -> Config Editor`
@@ -199,10 +229,41 @@ In Zotero Config Editor:
 - `extensions.zotanlp.autoEnrich` (`true`/`false`, default `true`)
 - `extensions.zotanlp.overwriteMode` (`missing` or `overwrite`)
 - `extensions.zotanlp.extractAbstract` (`true`/`false`, default `true`)
+- `extensions.zotanlp.splitNoSpaceUsingEnamdict` (`true`/`false`, default `true`)
 
 Recommended usage:
 - Day-to-day: `autoEnrich=true` and `overwriteMode=missing`
 - One-time metadata cleanup: switch to `overwriteMode=overwrite`, run once, then switch back to `missing`
+
+### Troubleshooting
+
+- Plugin update is not detected:
+  - Check the installed version (`version` in `manifest.json`)
+  - Confirm `ZotANLP.xpi` and `updates.json` are published in the same GitHub Release
+  - Reinstall the latest `.xpi` and restart Zotero if needed
+- Old incorrect metadata remains:
+  - Set `extensions.zotanlp.overwriteMode=overwrite` and run once
+  - Switch back to `missing` if needed
+- Year cannot be detected automatically:
+  - Rename the file to `B2-3.pdf` style
+  - Ensure the first-page header contains `言語処理学会` and year information
+  - Use `Search in a Year` during execution and retry
+
+### Release checklist
+
+- Update `version` in `manifest.json`
+- Build release files:
+  - `./build.sh`
+  - Outputs: `release/ZotANLP.xpi`, `release/updates.json`
+- Upload `release/ZotANLP.xpi` and `release/updates.json` to GitHub Releases
+- (Local verification only) Reinstall `.xpi` and restart Zotero
+- Verify behavior:
+  - Tools menu item is shown
+  - Right-click context menu item is shown
+  - Automatic metadata enrichment for new PDFs works
+  - Known paper (for example, `B2-3`) has reasonable title/authors/proceedings/place
+- If metadata schema changes:
+  - Bump the cache filename version in `bootstrap.js`
 
 ### License
 

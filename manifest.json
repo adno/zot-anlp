@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "ZotANLP",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Enrich imported ANLP PDFs with metadata",
   "author": "ZotANLP",
   "applications": {
@@ -9,7 +9,7 @@
       "id": "zot-anlp-metadata@local",
       "update_url": "https://github.com/adno/zot-anlp/releases/latest/download/updates.json",
       "strict_min_version": "7.0",
-      "strict_max_version": "8.0.*"
+      "strict_max_version": "9.0.*"
     }
   }
 }
