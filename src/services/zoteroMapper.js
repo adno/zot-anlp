@@ -92,6 +92,9 @@ async function createParentItem(attachment, paper, conference) {
   if (paper.abstractNote) {
     parent.setField('abstractNote', paper.abstractNote);
   }
+  if (paper.pages) {
+    parent.setField('pages', paper.pages);
+  }
 
   const creators = (paper.authors || []).map(toCreator).filter(Boolean);
   if (creators.length > 0) {
@@ -114,7 +117,63 @@ function shouldUpdateField(parent, field, value, overwriteMode) {
   return !existing;
 }
 
+function getItemTypeID(itemType) {
+  if (
+    typeof Zotero !== 'undefined' &&
+    Zotero.ItemTypes &&
+    typeof Zotero.ItemTypes.getID === 'function'
+  ) {
+    return Zotero.ItemTypes.getID(itemType);
+  }
+  return itemType;
+}
+
+function getItemTypeName(item) {
+  if (!item) {
+    return '';
+  }
+  if (typeof item.getType === 'function') {
+    return item.getType();
+  }
+  if (typeof item.getItemType === 'function') {
+    return item.getItemType();
+  }
+  if (item.itemType) {
+    return item.itemType;
+  }
+  if (
+    typeof Zotero !== 'undefined' &&
+    Zotero.ItemTypes &&
+    typeof Zotero.ItemTypes.getName === 'function' &&
+    item.itemTypeID
+  ) {
+    return Zotero.ItemTypes.getName(item.itemTypeID);
+  }
+  return '';
+}
+
+function ensureItemType(item, itemType) {
+  if (getItemTypeName(item) === itemType) {
+    return;
+  }
+
+  const itemTypeID = getItemTypeID(itemType);
+  if (typeof item.setType === 'function') {
+    item.setType(itemTypeID);
+    return;
+  }
+
+  if ('itemTypeID' in item) {
+    item.itemTypeID = itemTypeID;
+  }
+  if ('itemType' in item) {
+    item.itemType = itemType;
+  }
+}
+
 async function updateParentItem(parent, paper, conference, overwriteMode = 'missing') {
+  ensureItemType(parent, 'conferencePaper');
+
   const title = paper.title || paper.paperId;
   const language = inferLanguageFromTitle(title);
 
@@ -144,6 +203,9 @@ async function updateParentItem(parent, paper, conference, overwriteMode = 'miss
   }
   if (shouldUpdateField(parent, 'abstractNote', paper.abstractNote, overwriteMode)) {
     parent.setField('abstractNote', paper.abstractNote);
+  }
+  if (shouldUpdateField(parent, 'pages', paper.pages, overwriteMode)) {
+    parent.setField('pages', paper.pages);
   }
 
   if (overwriteMode === 'overwrite' || !parent.getField('extra')) {

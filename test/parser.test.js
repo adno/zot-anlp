@@ -3,7 +3,11 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { parseProgramHtml, parseBiblioHtml } = require('../src/services/anlpParser');
+const {
+  parseProgramHtml,
+  parseBiblioHtml,
+  splitAuthors
+} = require('../src/services/anlpParser');
 
 function readFixture(file) {
   return fs.readFileSync(path.join(__dirname, 'fixtures', file), 'utf8');
@@ -13,13 +17,32 @@ test('parseProgramHtml extracts papers with ids and URLs', () => {
   const html = readFixture('2026_program.html');
   const papers = parseProgramHtml(html, 2026);
 
-  assert.equal(papers.length, 2);
+  assert.equal(papers.length, 3);
   assert.equal(papers[0].paperId, 'B1-12');
   assert.equal(
     papers[0].pdfUrl,
     'https://www.anlp.jp/proceedings/annual_meeting/2026/pdf_dir/B1-12.pdf'
   );
   assert.ok(papers[0].title.includes('大規模言語モデル'));
+});
+
+test('parseProgramHtml handles 2026 table rows with diamond presenter markers', () => {
+  const html = readFixture('2026_program.html');
+  const paper = parseProgramHtml(html, 2026).find((item) => item.paperId === 'Q4-9');
+
+  assert.equal(
+    paper.title,
+    'Using the CEFR for Guiding LLMs in Lexical Complexity Prediction'
+  );
+  assert.deepEqual(paper.authors, [
+    'Maria Angelica Riera Machin',
+    'Adam Nohejl',
+    'Taro Watanabe'
+  ]);
+  assert.equal(
+    paper.pdfUrl,
+    'https://www.anlp.jp/proceedings/annual_meeting/2026/pdf_dir/Q4-9.pdf'
+  );
 });
 
 test('parseProgramHtml handles table layout used in some years', () => {
@@ -39,6 +62,14 @@ test('parseProgramHtml handles absolute URL PDF links', () => {
   assert.equal(papers.length, 1);
   assert.equal(papers[0].paperId, 'E4-02');
   assert.ok(papers[0].pdfUrl.endsWith('/2024/pdf_dir/E4-02.pdf'));
+});
+
+test('splitAuthors strips presenter symbols independently', () => {
+  assert.deepEqual(splitAuthors('◊山田 太郎, ○◊田中 花子, ◊○佐藤 次郎'), [
+    '山田 太郎',
+    '田中 花子',
+    '佐藤 次郎'
+  ]);
 });
 
 test('parseBiblioHtml extracts proceedings title and place', () => {

@@ -15,6 +15,13 @@ ZotANLP は、ANLP（言語処理学会）論文 PDF（例: `B2-3.pdf`）のメ�
 
 ### バージョン履歴
 
+- `v0.2.3`
+  - 既存の親アイテムを更新する前に `conferencePaper` 型へ変更するように修正
+  - 著者名の先頭記号として `◊` を削除するように修正
+  - 2026 年版の表形式プログラムで著者行と PDF URL を正しく抽出するように修正
+  - 自動処理が Zotero の親アイテム作成と競合して重複親アイテムを作らないように修正
+  - 年別メタデータキャッシュを更新し、古い著者メタデータを再利用しないように修正
+  - 最近の PDF 形式から発表論文集のページ範囲を抽出し、`pages` フィールドに設定する機能を追加
 - `v0.2.2`
   - Zotero 9.0 系との互換性を宣言（`strict_max_version` を `9.0.*` に更新）
 - `v0.2.1`
@@ -153,6 +160,13 @@ ZotANLP is a Zotero plugin that enriches ANLP paper PDFs (Annual Meeting of the 
 
 ### Version History
 
+- `v0.2.3`
+  - Fixed existing parent items so they are converted to `conferencePaper` before conference fields are applied
+  - Fixed author cleanup so leading `◊` presenter markers are removed
+  - Fixed author rows and PDF URLs for the 2026 table-style program layout
+  - Fixed auto-enrich so it does not race Zotero parent-item creation and create duplicate parents
+  - Reset the year metadata cache to avoid reusing stale author metadata
+  - Added proceedings page range extraction from recent-format PDFs into the `pages` field
 - `v0.2.2`
   - Declared compatibility with Zotero 9.0.x by updating `strict_max_version` to `9.0.*`
 - `v0.2.1`

@@ -1,7 +1,10 @@
 const { identifyAttachment } = require('../services/matcher');
 const { getYearData } = require('../services/anlpClient');
 const { ensureParentConferencePaper } = require('../services/zoteroMapper');
-const { extractAbstractForAttachment } = require('../services/abstractExtractor');
+const {
+  extractAbstractForAttachment,
+  extractProceedingsPagesForAttachment
+} = require('../services/abstractExtractor');
 const {
   getOverwriteMode,
   getExtractAbstract
@@ -135,9 +138,10 @@ async function enrichAttachments(attachments) {
       if (debug && !extractAbstract) {
         debug('skipped extraction because extensions.zotanlp.extractAbstract=false');
       }
+      const pages = await extractProceedingsPagesForAttachment(attachment, { debug });
       await ensureParentConferencePaper(
         attachment,
-        { ...paper, abstractNote: abstractText || '' },
+        { ...paper, abstractNote: abstractText || '', pages },
         data.conference,
         overwriteMode
       );

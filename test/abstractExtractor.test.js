@@ -3,7 +3,9 @@ const assert = require('node:assert/strict');
 
 const {
   extractAbstractFromLines,
-  extractLinesFromPositionedItems
+  extractLinesFromPositionedItems,
+  extractProceedingsPageNumberFromLines,
+  extractProceedingsPagesFromPageTexts
 } = require('../src/services/abstractExtractor');
 
 test('extractAbstractFromLines handles English heading and section boundary', () => {
@@ -108,4 +110,55 @@ test('extractAbstractFromLines supports legacy layout without abstract heading',
     parsed.text,
     '本研究では専門語彙を手がかりとした知識構成の展開方法を提案する。生命科学分野を対象に評価し有効性を確認した。'
   );
+});
+
+test('extractProceedingsPageNumberFromLines finds recent bottom marker', () => {
+  const pageNumber = extractProceedingsPageNumberFromLines([
+    'A Results in GSE and EFFLex data',
+    'Body text with many numbers 30 60 0.4824.',
+    '— 1916 — This work is published without peer review and is licensed by the authors.'
+  ]);
+
+  assert.equal(pageNumber, 1916);
+});
+
+test('extractProceedingsPagesFromPageTexts returns range when first and last pages are found', () => {
+  const pages = extractProceedingsPagesFromPageTexts([
+    'Title\nAbstract\n— 1914 —',
+    'Main body\n— 1915 —',
+    'References\n— 1916 —'
+  ]);
+
+  assert.equal(pages, '1914-1916');
+});
+
+test('extractProceedingsPagesFromPageTexts infers missing first footer from page count', () => {
+  const pages = extractProceedingsPagesFromPageTexts([
+    'Title\nAbstract\n1 Introduction',
+    'Main body\n— 2807 —',
+    'More body\n— 2808 —',
+    'References\n— 2809 —',
+    'Appendix\n— 2810 —'
+  ]);
+
+  assert.equal(pages, '2806-2810');
+});
+
+test('extractProceedingsPagesFromPageTexts ignores non-consecutive detected footers', () => {
+  const pages = extractProceedingsPagesFromPageTexts([
+    'Title\nAbstract\n— 2806 —',
+    'Main body\n— 2808 —',
+    'References\n— 2809 —'
+  ]);
+
+  assert.equal(pages, '');
+});
+
+test('extractProceedingsPagesFromPageTexts ignores pages without recent markers', () => {
+  const pages = extractProceedingsPagesFromPageTexts([
+    'Title\nAbstract\n1 Introduction',
+    'Main body\nTable 4 Scores across prompts'
+  ]);
+
+  assert.equal(pages, '');
 });

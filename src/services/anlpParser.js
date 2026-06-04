@@ -13,7 +13,7 @@ function stripTags(html) {
 
 function normalizeAuthorToken(token) {
   return token
-    .replace(/^[○〇\*]+/, '')
+    .replace(/^(?:\s*[○〇◊\*])+/, '')
     .replace(/（[^）]*）/g, '')
     .replace(/\([^)]*\)/g, '')
     .replace(/\s+/g, ' ')
@@ -71,22 +71,8 @@ function normalizeTitle(title, paperId) {
 }
 
 function extractContext(html, index) {
-  const tagNames = ['tr', 'li', 'p', 'div', 'td'];
-  const lower = html.toLowerCase();
-
-  let start = Math.max(0, index - 600);
-  let end = Math.min(html.length, index + 900);
-
-  for (const tag of tagNames) {
-    const openIdx = lower.lastIndexOf(`<${tag}`, index);
-    const closeIdx = lower.indexOf(`</${tag}>`, index);
-    if (openIdx >= 0 && closeIdx > index) {
-      start = Math.max(0, openIdx);
-      end = Math.min(html.length, closeIdx + tag.length + 3);
-      break;
-    }
-  }
-
+  const start = Math.max(0, index - 5000);
+  const end = Math.min(html.length, index + 5000);
   return html.slice(start, end);
 }
 
@@ -113,6 +99,48 @@ function parseAuthorsAndTitleFromContext(contextText, paperId) {
 function parseProgramHtml(html, year) {
   const papers = [];
   const re = /<a[^>]*href=["']([^"']*pdf_dir\/([A-Z]{1,2}\d{1,2}-\d{1,2})\.pdf(?:\?[^"']*)?)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  const titleById = new Map();
+
+  const titleRe = /<span[^>]*id=["']([A-Z]{1,2}\d{1,2}-\d{1,2})[^"']*["'][^>]*>[\s\S]*?<\/span>[\s\S]*?<span[^>]*class=["'][^"']*\btitle\b[^"']*["'][^>]*>([\s\S]*?)<\/span>/gi;
+  let titleMatch;
+  while ((titleMatch = titleRe.exec(html)) !== null) {
+    const id = titleMatch[1].toUpperCase();
+    const titleText = normalizeTitle(stripTags(titleMatch[2]), id);
+    if (titleText) {
+      titleById.set(id, titleText);
+    }
+  }
+
+  function normalizePdfUrl(href) {
+    if (href.startsWith('http://') || href.startsWith('https://')) {
+      return href;
+    }
+    if (href.startsWith('/')) {
+      return `https://www.anlp.jp${href}`;
+    }
+    return `https://www.anlp.jp/proceedings/annual_meeting/${year}/${href.replace(/^\/+/, '')}`;
+  }
+
+  function extractRawAuthorsFromContext(contextHtml, paperId) {
+    const rows = String(contextHtml).match(/<tr[\s\S]*?<\/tr>/gi) || [];
+    for (const row of rows) {
+      if (!new RegExp(`pdf_dir/${paperId}\\.pdf`, 'i').test(row)) {
+        continue;
+      }
+      const cells = [];
+      const tdRe = /<td[^>]*>([\s\S]*?)<\/td>/gi;
+      let tdMatch;
+      while ((tdMatch = tdRe.exec(row)) !== null) {
+        cells.push(stripTags(tdMatch[1] || '').replace(/\s+/g, ' ').trim());
+      }
+      for (const cell of cells) {
+        if (/[○〇◊]/.test(cell)) {
+          return stripPageRangeNote(cell.split(/[：:]/)[0] || '');
+        }
+      }
+    }
+    return '';
+  }
 
   let match;
   while ((match = re.exec(html)) !== null) {
@@ -121,19 +149,21 @@ function parseProgramHtml(html, year) {
     const anchorText = stripTags(match[3] || '');
 
     const context = stripTags(extractContext(html, match.index));
+    const contextHtml = extractContext(html, match.index);
     const parsed = parseAuthorsAndTitleFromContext(context, paperId);
-    const title = anchorText && !/^pdf$/i.test(anchorText)
-      ? normalizeTitle(anchorText, paperId)
-      : parsed.title;
+    const rawAuthors = extractRawAuthorsFromContext(contextHtml, paperId);
+    const title = titleById.get(paperId) ||
+      (anchorText && !/^pdf$/i.test(anchorText)
+        ? normalizeTitle(anchorText, paperId)
+        : parsed.title);
 
     papers.push({
       paperId,
       year,
       title,
-      authors: parsed.authors,
-      pdfUrl: href.startsWith('http')
-        ? href
-        : `https://www.anlp.jp/proceedings/annual_meeting/${year}/${href.replace(/^\/+/, '')}`,
+      authors: rawAuthors ? splitAuthors(rawAuthors) : parsed.authors,
+      rawAuthors,
+      pdfUrl: normalizePdfUrl(href),
       programUrl: `https://www.anlp.jp/proceedings/annual_meeting/${year}/`
     });
   }

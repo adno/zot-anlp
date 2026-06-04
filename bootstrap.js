@@ -1,7 +1,7 @@
 'use strict';
 
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const CACHE_FILE_NAME = 'zotanlp-year-cache-v7.json';
+const CACHE_FILE_NAME = 'zotanlp-year-cache-v8.json';
 const PREF_PREFIX = 'extensions.zotanlp.';
 const LEGACY_PREF_PREFIX = 'extensions.zot-anlp-metadata.';
 const PLUGIN_TITLE = 'ZotANLP';
@@ -18,6 +18,7 @@ let menuRetryCount = 0;
 let menuStateToken = 0;
 let autoEnrichTimer = null;
 const pendingAutoItemIDs = new Set();
+const autoEnrichingAttachmentIDs = new Set();
 let loadedFromDisk = false;
 let addonRootURI = '';
 let prefsPaneRegistered = false;
@@ -317,7 +318,7 @@ function splitAuthors(text) {
   return text
     .split(/[、,，;；・]/)
     .map((token) => token
-      .replace(/^[○〇\*]+/, '')
+      .replace(/^(?:\s*[○〇◊\*])+/, '')
       .replace(/（[^）]*）/g, '')
       .replace(/\([^)]*\)/g, '')
       .replace(/\s+/g, ' ')
@@ -384,7 +385,7 @@ function looksLikeAuthorList(text) {
   if (!compact) {
     return false;
   }
-  if (/[○〇]/.test(compact)) {
+  if (/[○〇◊]/.test(compact)) {
     return true;
   }
   if (/（[^）]+）|\([^)]{2,}\)/.test(compact)) {
@@ -1634,6 +1635,67 @@ function getFirstPageText(fullText) {
   return pages[0] || '';
 }
 
+function getPageTexts(fullText) {
+  const normalized = String(fullText || '').replace(/\r/g, '');
+  if (!normalized) {
+    return [];
+  }
+  return normalized.split(/\f/);
+}
+
+function extractProceedingsPageNumberFromLines(inputLines) {
+  const lines = (inputLines || [])
+    .map((line) => String(line || '').replace(/\r/g, '').trim())
+    .filter(Boolean);
+  const bottomLines = lines.slice(-12).reverse();
+
+  for (const line of bottomLines) {
+    const match = line.match(/(?:^|\s)[—–―-]\s*(\d{1,5})\s*[—–―-](?:\s|$)/u);
+    if (match) {
+      return Number(match[1]);
+    }
+  }
+
+  return null;
+}
+
+function extractProceedingsPagesFromPageTexts(pageTexts) {
+  const texts = pageTexts || [];
+  const pageNumbers = texts
+    .map((text) => extractProceedingsPageNumberFromLines(String(text || '').split(/\n+/)))
+    .filter((pageNumber) => Number.isInteger(pageNumber));
+
+  if (pageNumbers.length === 0 || texts.length === 0) {
+    return '';
+  }
+
+  const last = pageNumbers[pageNumbers.length - 1];
+  const expectedFirst = last - texts.length + 1;
+  if (expectedFirst < 1) {
+    return '';
+  }
+
+  for (let i = 1; i < pageNumbers.length; i += 1) {
+    if (pageNumbers[i] !== pageNumbers[i - 1] + 1) {
+      return '';
+    }
+  }
+
+  const firstDetected = pageNumbers[0];
+  if (firstDetected < expectedFirst || firstDetected > last) {
+    return '';
+  }
+
+  const first = expectedFirst;
+  if (last < first) {
+    return '';
+  }
+  if (first === last) {
+    return String(first);
+  }
+  return `${first}-${last}`;
+}
+
 function pickFirstPagePayload(payload) {
   if (!payload) {
     return null;
@@ -1662,6 +1724,104 @@ function pickFirstPagePayload(payload) {
     };
   }
   return null;
+}
+
+function pickPagePayloads(payload) {
+  if (!payload) {
+    return [];
+  }
+  if (Array.isArray(payload)) {
+    return payload.flatMap((entry) => pickPagePayloads(entry));
+  }
+  if (typeof payload === 'string') {
+    return getPageTexts(payload).map((text) => ({ text }));
+  }
+  if (Array.isArray(payload.pages)) {
+    return payload.pages.flatMap((page) => pickPagePayloads(page));
+  }
+  if (typeof payload.text === 'string') {
+    const pageTexts = getPageTexts(payload.text);
+    const items = payload.items || payload.tokens || payload.chars || null;
+    return pageTexts.map((text) => ({
+      text,
+      items: pageTexts.length === 1 ? items : null,
+      width: payload.width || payload.pageWidth || null
+    }));
+  }
+  if (Array.isArray(payload.items) || Array.isArray(payload.tokens) || Array.isArray(payload.chars)) {
+    return [{
+      text: '',
+      items: payload.items || payload.tokens || payload.chars,
+      width: payload.width || payload.pageWidth || null
+    }];
+  }
+  return [];
+}
+
+function pagePayloadToText(page) {
+  if (!page) {
+    return '';
+  }
+  if (Array.isArray(page.items) && page.items.length > 0) {
+    return extractLinesFromPositionedItems(page.items, null).join('\n');
+  }
+  return String(page.text || '');
+}
+
+async function getFullPageTextsFromPdfWorker(attachmentID, debug = null) {
+  if (!Zotero.PDFWorker || typeof Zotero.PDFWorker.getFullText !== 'function') {
+    return [];
+  }
+
+  try {
+    const result = await Zotero.PDFWorker.getFullText(attachmentID);
+    const pageTexts = pickPagePayloads(result).map(pagePayloadToText).filter(Boolean);
+    if (debug) {
+      debug(`PDFWorker proceedings pages candidates=${pageTexts.length}`);
+    }
+    return pageTexts;
+  } catch (error) {
+    if (debug) {
+      debug(`PDFWorker proceedings page extraction failed: ${error.message || String(error)}`);
+    }
+    return [];
+  }
+}
+
+async function getFullPageTextsFromFulltext(attachmentID, debug = null) {
+  if (!Zotero.Fulltext || typeof Zotero.Fulltext.getItemText !== 'function') {
+    return [];
+  }
+
+  try {
+    const text = await Promise.resolve(Zotero.Fulltext.getItemText(attachmentID));
+    const pageTexts = getPageTexts(text).filter(Boolean);
+    if (debug) {
+      debug(`Zotero.Fulltext proceedings pages candidates=${pageTexts.length}`);
+    }
+    return pageTexts;
+  } catch (error) {
+    if (debug) {
+      debug(`Zotero.Fulltext proceedings page extraction failed: ${error.message || String(error)}`);
+    }
+    return [];
+  }
+}
+
+async function extractProceedingsPagesForAttachment(attachment, options = {}) {
+  const debug = typeof options.debug === 'function' ? options.debug : null;
+  if (!attachment || !attachment.id) {
+    return '';
+  }
+
+  const fromPdfWorker = await getFullPageTextsFromPdfWorker(attachment.id, debug);
+  const fromPdfWorkerPages = extractProceedingsPagesFromPageTexts(fromPdfWorker);
+  if (fromPdfWorkerPages) {
+    return fromPdfWorkerPages;
+  }
+
+  const fromFulltext = await getFullPageTextsFromFulltext(attachment.id, debug);
+  return extractProceedingsPagesFromPageTexts(fromFulltext);
 }
 
 async function getFirstPageCandidateFromPdfWorker(attachmentID, debug = null) {
@@ -2075,6 +2235,60 @@ function shouldUpdateField(parent, field, value, overwriteMode) {
   return !parent.getField(field);
 }
 
+function getItemTypeID(itemType) {
+  if (
+    typeof Zotero !== 'undefined' &&
+    Zotero.ItemTypes &&
+    typeof Zotero.ItemTypes.getID === 'function'
+  ) {
+    return Zotero.ItemTypes.getID(itemType);
+  }
+  return itemType;
+}
+
+function getItemTypeName(item) {
+  if (!item) {
+    return '';
+  }
+  if (typeof item.getType === 'function') {
+    return item.getType();
+  }
+  if (typeof item.getItemType === 'function') {
+    return item.getItemType();
+  }
+  if (item.itemType) {
+    return item.itemType;
+  }
+  if (
+    typeof Zotero !== 'undefined' &&
+    Zotero.ItemTypes &&
+    typeof Zotero.ItemTypes.getName === 'function' &&
+    item.itemTypeID
+  ) {
+    return Zotero.ItemTypes.getName(item.itemTypeID);
+  }
+  return '';
+}
+
+function ensureItemType(item, itemType) {
+  if (getItemTypeName(item) === itemType) {
+    return;
+  }
+
+  const itemTypeID = getItemTypeID(itemType);
+  if (typeof item.setType === 'function') {
+    item.setType(itemTypeID);
+    return;
+  }
+
+  if ('itemTypeID' in item) {
+    item.itemTypeID = itemTypeID;
+  }
+  if ('itemType' in item) {
+    item.itemType = itemType;
+  }
+}
+
 function shouldForceReplaceTitle(existingTitle) {
   return looksLikeAuthorList(String(existingTitle || ''));
 }
@@ -2110,6 +2324,9 @@ async function createParent(attachment, paper, conference) {
   if (paper.abstractNote) {
     parent.setField('abstractNote', paper.abstractNote);
   }
+  if (paper.pages) {
+    parent.setField('pages', paper.pages);
+  }
 
   const creators = (paper.authors || []).map(toCreator).filter(Boolean);
   if (creators.length) {
@@ -2123,16 +2340,31 @@ async function createParent(attachment, paper, conference) {
   return parent;
 }
 
-async function upsertParent(attachment, paper, conference, overwriteMode) {
+async function upsertParent(
+  attachment,
+  paper,
+  conference,
+  overwriteMode,
+  createParentIfMissing = true
+) {
   let parent = null;
   if (attachment.parentID) {
     parent = await Zotero.Items.getAsync(attachment.parentID);
   }
 
   if (!parent) {
+    if (!createParentIfMissing) {
+      log(
+        `[upsert] item=${attachment.id || 'unknown'} skipped parent creation ` +
+        'during auto-enrich'
+      );
+      return false;
+    }
     await createParent(attachment, paper, conference);
-    return;
+    return true;
   }
+
+  ensureItemType(parent, 'conferencePaper');
 
   const existingTitle = parent.getField('title');
   const incomingTitle = paper.title || paper.paperId;
@@ -2179,6 +2411,9 @@ async function upsertParent(attachment, paper, conference, overwriteMode) {
   if (shouldUpdateField(parent, 'abstractNote', paper.abstractNote, overwriteMode)) {
     parent.setField('abstractNote', paper.abstractNote);
   }
+  if (shouldUpdateField(parent, 'pages', paper.pages, overwriteMode)) {
+    parent.setField('pages', paper.pages);
+  }
 
   const existingExtra = parent.getField('extra');
   const shouldUpdateExtra = overwriteMode === 'overwrite' || !existingExtra;
@@ -2204,6 +2439,7 @@ async function upsertParent(attachment, paper, conference, overwriteMode) {
 
   await parent.saveTx();
   refreshItemUI(parent.id);
+  return true;
 }
 
 function isPdfAttachment(item) {
@@ -2278,9 +2514,10 @@ async function toPdfAttachments(selectedItems) {
   return attachments;
 }
 
-async function enrichAttachments(attachments) {
+async function enrichAttachments(attachments, options = {}) {
   const overwriteMode = getOverwriteMode();
   const extractAbstract = getExtractAbstract();
+  const createParentIfMissing = options.createParentIfMissing !== false;
   await ensureJapaneseNameLexiconLoaded();
   log(
     `[enrich] start selected=${attachments.length} overwriteMode=${overwriteMode} ` +
@@ -2346,14 +2583,23 @@ async function enrichAttachments(attachments) {
       if (extractAbstract) {
         debug(`final abstract result: ${abstractNote ? `chars=${abstractNote.length}` : 'empty'}`);
       }
+      const pages = await extractProceedingsPagesForAttachment(attachment, { debug });
+      if (pages) {
+        debug(`proceedings pages extracted: ${pages}`);
+      }
 
-      await upsertParent(
+      const changed = await upsertParent(
         attachment,
-        { ...paper, abstractNote: abstractNote || '' },
+        { ...paper, abstractNote: abstractNote || '', pages },
         data.conference,
-        overwriteMode
+        overwriteMode,
+        createParentIfMissing
       );
-      result.updated += 1;
+      if (changed) {
+        result.updated += 1;
+      } else {
+        result.skipped += 1;
+      }
     } catch (error) {
       result.errors += 1;
       result.problems.push(buildAttachmentIssue(
@@ -2686,11 +2932,24 @@ const itemObserver = {
 
       try {
         const items = await Zotero.Items.getAsync(toProcess);
-        const attachments = items.filter(isPdfAttachment);
+        const attachments = items.filter((item) => (
+          isPdfAttachment(item) &&
+          item.parentID &&
+          !autoEnrichingAttachmentIDs.has(item.id)
+        ));
         if (!attachments.length) {
           return;
         }
-        await enrichAttachments(attachments);
+        for (const attachment of attachments) {
+          autoEnrichingAttachmentIDs.add(attachment.id);
+        }
+        try {
+          await enrichAttachments(attachments, { createParentIfMissing: false });
+        } finally {
+          for (const attachment of attachments) {
+            autoEnrichingAttachmentIDs.delete(attachment.id);
+          }
+        }
       } catch (error) {
         log('Auto enrich failed', error);
       }
@@ -2770,6 +3029,7 @@ function unregisterNotifier() {
     autoEnrichTimer = null;
   }
   pendingAutoItemIDs.clear();
+  autoEnrichingAttachmentIDs.clear();
   if (notifierID && Zotero.Notifier) {
     Zotero.Notifier.unregisterObserver(notifierID);
   }

@@ -387,6 +387,67 @@ function getFirstPageText(fullText) {
   return pages[0] || '';
 }
 
+function getPageTexts(fullText) {
+  const normalized = String(fullText || '').replace(/\r/g, '');
+  if (!normalized) {
+    return [];
+  }
+  return normalized.split(/\f/);
+}
+
+function extractProceedingsPageNumberFromLines(inputLines) {
+  const lines = (inputLines || [])
+    .map((line) => String(line || '').replace(/\r/g, '').trim())
+    .filter(Boolean);
+  const bottomLines = lines.slice(-12).reverse();
+
+  for (const line of bottomLines) {
+    const match = line.match(/(?:^|\s)[—–―-]\s*(\d{1,5})\s*[—–―-](?:\s|$)/u);
+    if (match) {
+      return Number(match[1]);
+    }
+  }
+
+  return null;
+}
+
+function extractProceedingsPagesFromPageTexts(pageTexts) {
+  const texts = pageTexts || [];
+  const pageNumbers = texts
+    .map((text) => extractProceedingsPageNumberFromLines(String(text || '').split(/\n+/)))
+    .filter((pageNumber) => Number.isInteger(pageNumber));
+
+  if (pageNumbers.length === 0 || texts.length === 0) {
+    return '';
+  }
+
+  const last = pageNumbers[pageNumbers.length - 1];
+  const expectedFirst = last - texts.length + 1;
+  if (expectedFirst < 1) {
+    return '';
+  }
+
+  for (let i = 1; i < pageNumbers.length; i += 1) {
+    if (pageNumbers[i] !== pageNumbers[i - 1] + 1) {
+      return '';
+    }
+  }
+
+  const firstDetected = pageNumbers[0];
+  if (firstDetected < expectedFirst || firstDetected > last) {
+    return '';
+  }
+
+  const first = expectedFirst;
+  if (last < first) {
+    return '';
+  }
+  if (first === last) {
+    return String(first);
+  }
+  return `${first}-${last}`;
+}
+
 function pickFirstPagePayload(payload) {
   if (!payload) {
     return null;
@@ -415,6 +476,112 @@ function pickFirstPagePayload(payload) {
     };
   }
   return null;
+}
+
+function pickPagePayloads(payload) {
+  if (!payload) {
+    return [];
+  }
+  if (Array.isArray(payload)) {
+    return payload.flatMap((entry) => pickPagePayloads(entry));
+  }
+  if (typeof payload === 'string') {
+    return getPageTexts(payload).map((text) => ({ text }));
+  }
+  if (Array.isArray(payload.pages)) {
+    return payload.pages.flatMap((page) => pickPagePayloads(page));
+  }
+  if (typeof payload.text === 'string') {
+    const pageTexts = getPageTexts(payload.text);
+    const items = payload.items || payload.tokens || payload.chars || null;
+    return pageTexts.map((text) => ({
+      text,
+      items: pageTexts.length === 1 ? items : null,
+      width: payload.width || payload.pageWidth || null
+    }));
+  }
+  if (Array.isArray(payload.items) || Array.isArray(payload.tokens) || Array.isArray(payload.chars)) {
+    return [{
+      text: '',
+      items: payload.items || payload.tokens || payload.chars,
+      width: payload.width || payload.pageWidth || null
+    }];
+  }
+  return [];
+}
+
+function pagePayloadToText(page) {
+  if (!page) {
+    return '';
+  }
+  if (Array.isArray(page.items) && page.items.length > 0) {
+    return extractLinesFromPositionedItems(page.items, null).join('\n');
+  }
+  return String(page.text || '');
+}
+
+async function getFullPageTextsFromPdfWorker(attachmentID, debug = null) {
+  if (
+    typeof Zotero === 'undefined' ||
+    !Zotero.PDFWorker ||
+    typeof Zotero.PDFWorker.getFullText !== 'function'
+  ) {
+    return [];
+  }
+
+  try {
+    const result = await Zotero.PDFWorker.getFullText(attachmentID);
+    const pageTexts = pickPagePayloads(result).map(pagePayloadToText).filter(Boolean);
+    if (debug) {
+      debug(`PDFWorker proceedings pages candidates=${pageTexts.length}`);
+    }
+    return pageTexts;
+  } catch (error) {
+    if (debug) {
+      debug(`PDFWorker proceedings page extraction failed: ${error.message || String(error)}`);
+    }
+    return [];
+  }
+}
+
+async function getFullPageTextsFromFulltext(attachmentID, debug = null) {
+  if (
+    typeof Zotero === 'undefined' ||
+    !Zotero.Fulltext ||
+    typeof Zotero.Fulltext.getItemText !== 'function'
+  ) {
+    return [];
+  }
+
+  try {
+    const text = await Promise.resolve(Zotero.Fulltext.getItemText(attachmentID));
+    const pageTexts = getPageTexts(text).filter(Boolean);
+    if (debug) {
+      debug(`Zotero.Fulltext proceedings pages candidates=${pageTexts.length}`);
+    }
+    return pageTexts;
+  } catch (error) {
+    if (debug) {
+      debug(`Zotero.Fulltext proceedings page extraction failed: ${error.message || String(error)}`);
+    }
+    return [];
+  }
+}
+
+async function extractProceedingsPagesForAttachment(attachment, options = {}) {
+  const debug = typeof options.debug === 'function' ? options.debug : null;
+  if (!attachment || !attachment.id) {
+    return '';
+  }
+
+  const fromPdfWorker = await getFullPageTextsFromPdfWorker(attachment.id, debug);
+  const fromPdfWorkerPages = extractProceedingsPagesFromPageTexts(fromPdfWorker);
+  if (fromPdfWorkerPages) {
+    return fromPdfWorkerPages;
+  }
+
+  const fromFulltext = await getFullPageTextsFromFulltext(attachment.id, debug);
+  return extractProceedingsPagesFromPageTexts(fromFulltext);
 }
 
 async function getFirstPageCandidateFromPdfWorker(attachmentID) {
@@ -539,5 +706,8 @@ async function extractAbstractForAttachment(attachment, options = {}) {
 module.exports = {
   extractAbstractFromLines,
   extractLinesFromPositionedItems,
-  extractAbstractForAttachment
+  extractAbstractForAttachment,
+  extractProceedingsPageNumberFromLines,
+  extractProceedingsPagesFromPageTexts,
+  extractProceedingsPagesForAttachment
 };
